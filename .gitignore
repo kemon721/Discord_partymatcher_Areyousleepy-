@@ -1,0 +1,30 @@
+# 환경변수 파일
+.env
+
+# Python 바이트코드
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 가상환경
+venv/
+env/
+ENV/
+
+# IDE 설정
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 로그 파일
+*.log
+
+# OS 생성 파일
+.DS_Store
+Thumbs.db
+
+# 임시 파일
+*.tmp 
