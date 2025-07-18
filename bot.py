@@ -203,6 +203,9 @@ class PartySetupModal(discord.ui.Modal):
                 ephemeral=True
             )
             
+            # Keep-alive 트리거 (응답 후에 실행)
+            asyncio.create_task(trigger_keep_alive())
+            
         except ValueError as e:
             await interaction.response.send_message(
                 "입력한 날짜/시간 형식이 올바르지 않습니다. YYMMDD HH:MM 형식으로 입력해주세요. (예: 250715 20:50)",
@@ -344,9 +347,6 @@ class PartyView(discord.ui.View):
         self.add_item(cancel_button)
     
     async def join_party(self, interaction: discord.Interaction):
-        # Keep-alive 트리거
-        asyncio.create_task(trigger_keep_alive())
-        
         user_id = interaction.user.id
         
         # 파티장인 경우 제한
@@ -386,11 +386,11 @@ class PartyView(discord.ui.View):
         embed = create_party_embed(self.party_data, leader)
         
         await interaction.response.edit_message(embed=embed, view=self)
+        
+        # Keep-alive 트리거 (응답 후에 실행)
+        asyncio.create_task(trigger_keep_alive())
     
     async def leave_party(self, interaction: discord.Interaction):
-        # Keep-alive 트리거
-        asyncio.create_task(trigger_keep_alive())
-        
         user_id = interaction.user.id
         
         # 파티장인 경우 제한
@@ -421,11 +421,11 @@ class PartyView(discord.ui.View):
         embed = create_party_embed(self.party_data, leader)
         
         await interaction.response.edit_message(embed=embed, view=self)
+        
+        # Keep-alive 트리거 (응답 후에 실행)
+        asyncio.create_task(trigger_keep_alive())
     
     async def complete_party(self, interaction: discord.Interaction):
-        # Keep-alive 트리거
-        asyncio.create_task(trigger_keep_alive())
-        
         user_id = interaction.user.id
         
         # 파티장 권한 확인
@@ -444,11 +444,11 @@ class PartyView(discord.ui.View):
         
         # 파티 완료 처리
         await complete_party_function(interaction, self.party_data)
+        
+        # Keep-alive 트리거 (응답 후에 실행)
+        asyncio.create_task(trigger_keep_alive())
     
     async def cancel_party(self, interaction: discord.Interaction):
-        # Keep-alive 트리거
-        asyncio.create_task(trigger_keep_alive())
-        
         user_id = interaction.user.id
         
         # 파티장 권한 확인
@@ -467,6 +467,9 @@ class PartyView(discord.ui.View):
         
         # 파티 취소 처리
         await disband_party_function(interaction, self.party_data)
+        
+        # Keep-alive 트리거 (응답 후에 실행)
+        asyncio.create_task(trigger_keep_alive())
 
 @bot.event
 async def on_ready():
@@ -486,9 +489,6 @@ async def on_ready():
 
 @bot.tree.command(name="파티매칭", description="파티 모집을 시작합니다.")
 async def party_matching(interaction: discord.Interaction):
-    # Keep-alive 트리거 (비동기로 실행)
-    asyncio.create_task(trigger_keep_alive())
-    
     # 이미 파티에 참여중인지 확인
     if interaction.user.id in user_party_status:
         await interaction.response.send_message(
@@ -499,12 +499,12 @@ async def party_matching(interaction: discord.Interaction):
     
     modal = PartySetupModal()
     await interaction.response.send_modal(modal)
+    
+    # Keep-alive 트리거 (응답 후에 실행)
+    asyncio.create_task(trigger_keep_alive())
 
 @bot.tree.command(name="파티완료", description="파티장만 사용 가능: 파티 활동을 완료 처리합니다.")
 async def complete_party_command(interaction: discord.Interaction):
-    # Keep-alive 트리거
-    asyncio.create_task(trigger_keep_alive())
-    
     user_id = interaction.user.id
     
     # 사용자가 파티에 참여중인지 확인
@@ -531,12 +531,12 @@ async def complete_party_command(interaction: discord.Interaction):
     
     # 파티 완료 처리
     await complete_party_function(interaction, party_data)
+    
+    # Keep-alive 트리거 (응답 후에 실행)
+    asyncio.create_task(trigger_keep_alive())
 
 @bot.tree.command(name="파티취소", description="파티장만 사용 가능: 파티 모집을 취소합니다.")
 async def disband_party_command(interaction: discord.Interaction):
-    # Keep-alive 트리거
-    asyncio.create_task(trigger_keep_alive())
-    
     user_id = interaction.user.id
     
     # 사용자가 파티에 참여중인지 확인
@@ -563,6 +563,9 @@ async def disband_party_command(interaction: discord.Interaction):
     
     # 파티 취소 처리
     await disband_party_function(interaction, party_data)
+    
+    # Keep-alive 트리거 (응답 후에 실행)
+    asyncio.create_task(trigger_keep_alive())
 
 async def complete_party_function(interaction: discord.Interaction, party_data: PartyData):
     """파티 완료 처리 함수"""
