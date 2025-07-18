@@ -1,9 +1,9 @@
 name: Keep Render Alive
 
 on:
-  schedule:
-    - cron: '*/1 * * * *'  # 1분마다 실행 (테스트용)
   workflow_dispatch:  # 수동 실행 가능
+  schedule:
+    - cron: '*/5 * * * *'  # 5분마다 실행 (더 안정적)
   push:  # 푸시할 때도 실행 (테스트용)
     branches: [ main, master ]
 
