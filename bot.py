@@ -5,30 +5,10 @@ import asyncio
 from datetime import datetime, timedelta
 import json
 import config
-import threading
-from flask import Flask
 import os
-import aiohttp
 
-# Flask 앱 생성 (keep-alive용)
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Discord Bot is running!"
-
-@app.route('/ping')
-def ping():
-    return "pong"
-
-def run_flask():
-    """Flask 서버를 별도 스레드에서 실행"""
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
-
-# 인텐트 설정
-intents = discord.Intents.default()
-intents.message_content = True
+# 인텐트 설정 - 모든 인텐트 활성화
+intents = discord.Intents.all()
 
 # 봇 인스턴스 생성
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -203,9 +183,6 @@ class PartySetupModal(discord.ui.Modal):
                     "💡 **팁**: 버튼과 슬래시 명령어 모두 동일한 기능을 제공합니다!",
                     ephemeral=True
                 )
-                
-                # Keep-alive 트리거 (응답 후에 실행)
-                asyncio.create_task(trigger_keep_alive())
                 
             except Exception as e:
                 print(f"Party setup post-processing error: {e}")
@@ -397,9 +374,6 @@ class PartyView(discord.ui.View):
         
         await interaction.response.edit_message(embed=embed, view=self)
         
-        # Keep-alive 트리거 (응답 후에 실행)
-        asyncio.create_task(trigger_keep_alive())
-    
     async def leave_party(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         
@@ -431,9 +405,6 @@ class PartyView(discord.ui.View):
         embed = create_party_embed(self.party_data, leader)
         
         await interaction.response.edit_message(embed=embed, view=self)
-        
-        # Keep-alive 트리거 (응답 후에 실행)
-        asyncio.create_task(trigger_keep_alive())
     
     async def complete_party(self, interaction: discord.Interaction):
         user_id = interaction.user.id
@@ -454,9 +425,6 @@ class PartyView(discord.ui.View):
         
         # 파티 완료 처리
         await complete_party_function(interaction, self.party_data)
-        
-        # Keep-alive 트리거 (응답 후에 실행)
-        asyncio.create_task(trigger_keep_alive())
     
     async def cancel_party(self, interaction: discord.Interaction):
         user_id = interaction.user.id
@@ -477,9 +445,6 @@ class PartyView(discord.ui.View):
         
         # 버튼 클릭으로 파티 취소 처리 (메시지 직접 삭제)
         await cancel_party_by_button(interaction, self.party_data)
-        
-        # Keep-alive 트리거 (응답 후에 실행)
-        asyncio.create_task(trigger_keep_alive())
 
 @bot.event
 async def on_ready():
@@ -498,12 +463,6 @@ async def on_ready():
     except Exception as e:
         print(f'Notification checker error: {e}')
     
-    try:
-        keep_alive.start()
-        print('Keep-alive system started')
-    except Exception as e:
-        print(f'Keep-alive error: {e}')
-    
     print('=== BOT INITIALIZATION COMPLETE ===')
 
 @bot.tree.command(name="파티매칭", description="파티 모집을 시작합니다.")
@@ -518,9 +477,6 @@ async def party_matching(interaction: discord.Interaction):
     
     modal = PartySetupModal()
     await interaction.response.send_modal(modal)
-    
-    # Keep-alive 트리거 (응답 후에 실행)
-    asyncio.create_task(trigger_keep_alive())
 
 @bot.tree.command(name="파티완료", description="파티장만 사용 가능: 파티 활동을 완료 처리합니다.")
 async def complete_party_command(interaction: discord.Interaction):
@@ -550,9 +506,6 @@ async def complete_party_command(interaction: discord.Interaction):
     
     # 파티 완료 처리
     await complete_party_function(interaction, party_data)
-    
-    # Keep-alive 트리거 (응답 후에 실행)
-    asyncio.create_task(trigger_keep_alive())
 
 @bot.tree.command(name="파티취소", description="파티장만 사용 가능: 파티 모집을 취소합니다.")
 async def disband_party_command(interaction: discord.Interaction):
@@ -582,9 +535,6 @@ async def disband_party_command(interaction: discord.Interaction):
     
     # 파티 취소 처리
     await disband_party_function(interaction, party_data)
-    
-    # Keep-alive 트리거 (응답 후에 실행)
-    asyncio.create_task(trigger_keep_alive())
 
 async def complete_party_function(interaction: discord.Interaction, party_data: PartyData):
     """파티 완료 처리 함수"""
@@ -827,43 +777,6 @@ async def check_notifications():
                 except Exception as e:
                     print(f"Notification sending error: {e}")
 
-@tasks.loop(minutes=25)
-async def keep_alive():
-    """25분마다 자신의 서버에 요청을 보내서 잠들지 않도록 함"""
-    try:
-        # Render URL 가져오기
-        render_url = os.environ.get('RENDER_EXTERNAL_URL')
-        if not render_url:
-            # 환경변수가 없으면 기본 URL 사용
-            render_url = "https://discord-partymatcher-areyousleepy.onrender.com"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{render_url}/ping") as response:
-                if response.status == 200:
-                    print(f"Keep-alive ping successful: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                else:
-                    print(f"Keep-alive ping failed: {response.status}")
-    except Exception as e:
-        print(f"Keep-alive error: {e}")
-
-async def trigger_keep_alive():
-    """Discord 활동이 있을 때 즉시 keep-alive 실행"""
-    try:
-        render_url = os.environ.get('RENDER_EXTERNAL_URL')
-        if not render_url:
-            render_url = "https://discord-partymatcher-areyousleepy.onrender.com"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{render_url}/ping") as response:
-                if response.status == 200:
-                    print(f"Activity-based keep-alive successful: {datetime.now().strftime('%H:%M:%S')}")
-    except Exception as e:
-        print(f"Activity-based keep-alive error: {e}")
-
 # 봇 실행
 if __name__ == "__main__":
-    # Flask 서버 시작
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.start()
-
     bot.run(config.DISCORD_TOKEN) 
