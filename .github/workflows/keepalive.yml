@@ -2,8 +2,10 @@ name: Keep Render Alive
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5분마다 실행
-  workflow_dispatch:  # 수동 실행도 가능
+    - cron: '*/1 * * * *'  # 1분마다 실행 (테스트용)
+  workflow_dispatch:  # 수동 실행 가능
+  push:  # 푸시할 때도 실행 (테스트용)
+    branches: [ main, master ]
 
 jobs:
   keep-alive:
@@ -12,5 +14,6 @@ jobs:
       - name: Ping Render Service
         run: |
           echo "Pinging Render service..."
+          echo "Current time: $(date)"
           curl -f https://discord-partymatcher-areyousleepy.onrender.com || echo "Ping failed but continuing..."
-          echo "Keep-alive ping completed at $(date)" 
+          echo "Keep-alive ping completed successfully!" 
