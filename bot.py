@@ -181,41 +181,51 @@ class PartySetupModal(discord.ui.Modal):
             await interaction.response.send_message(embed=embed, view=view)
             
             # 메시지 정보 저장
-            message = await interaction.original_response()
-            party_data.channel_id = interaction.channel.id
-            party_data.message_id = message.id
-            
-            # 파티 데이터 저장
-            parties[message.id] = party_data
-            
-            # 파티장 상태 업데이트
-            user_party_status[interaction.user.id] = message.id
-            
-            # 파티장에게 관리 방법 안내
-            await interaction.followup.send(
-                "🎉 **파티가 성공적으로 생성되었습니다!**\n\n"
-                "**파티 관리 방법:**\n"
-                "• **파티장 전용 버튼**: `✅ 파티완료`, `❌ 파티취소`\n"
-                "• **슬래시 명령어**: `/파티완료`, `/파티취소`\n\n"
-                "**파티원들은 파티원 전용 버튼을 사용할 수 있습니다:**\n"
-                "• `📥 참여하기`, `📤 나가기`\n\n"
-                "💡 **팁**: 버튼과 슬래시 명령어 모두 동일한 기능을 제공합니다!",
-                ephemeral=True
-            )
-            
-            # Keep-alive 트리거 (응답 후에 실행)
-            asyncio.create_task(trigger_keep_alive())
-            
+            try:
+                message = await interaction.original_response()
+                party_data.channel_id = interaction.channel.id
+                party_data.message_id = message.id
+                
+                # 파티 데이터 저장
+                parties[message.id] = party_data
+                
+                # 파티장 상태 업데이트
+                user_party_status[interaction.user.id] = message.id
+                
+                # 파티장에게 관리 방법 안내
+                await interaction.followup.send(
+                    "🎉 **파티가 성공적으로 생성되었습니다!**\n\n"
+                    "**파티 관리 방법:**\n"
+                    "• **파티장 전용 버튼**: `✅ 파티완료`, `❌ 파티취소`\n"
+                    "• **슬래시 명령어**: `/파티완료`, `/파티취소`\n\n"
+                    "**파티원들은 파티원 전용 버튼을 사용할 수 있습니다:**\n"
+                    "• `📥 참여하기`, `📤 나가기`\n\n"
+                    "💡 **팁**: 버튼과 슬래시 명령어 모두 동일한 기능을 제공합니다!",
+                    ephemeral=True
+                )
+                
+                # Keep-alive 트리거 (응답 후에 실행)
+                asyncio.create_task(trigger_keep_alive())
+                
+            except Exception as e:
+                print(f"파티 설정 후처리 오류: {e}")
+                # 이미 응답은 보냈으므로 사용자에게는 정상적으로 보임
+                
         except ValueError as e:
-            await interaction.response.send_message(
-                "입력한 날짜/시간 형식이 올바르지 않습니다. YYMMDD HH:MM 형식으로 입력해주세요. (예: 250715 20:50)",
-                ephemeral=True
-            )
+            # interaction이 아직 응답되지 않은 경우에만 응답
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "입력한 날짜/시간 형식이 올바르지 않습니다. YYMMDD HH:MM 형식으로 입력해주세요. (예: 250715 20:50)",
+                    ephemeral=True
+                )
         except Exception as e:
-            await interaction.response.send_message(
-                f"오류가 발생했습니다: {str(e)}",
-                ephemeral=True
-            )
+            print(f"파티 생성 오류: {e}")
+            # interaction이 아직 응답되지 않은 경우에만 응답
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                    ephemeral=True
+                )
 
 
 
@@ -671,6 +681,27 @@ async def complete_party_function(interaction: discord.Interaction, party_data: 
 async def disband_party_function(interaction: discord.Interaction, party_data: PartyData):
     """파티 취소 처리 함수"""
     
+    # 파티원들에게 취소 알림 전송 (파티장 제외)
+    party_members = [member_id for member_id in party_data.members if member_id != party_data.leader_id]
+    
+    if party_members:
+        try:
+            # 파티원들에게 DM으로 알림
+            for member_id in party_members:
+                user = bot.get_user(member_id)
+                if user:
+                    try:
+                        await user.send(
+                            f"📢 **파티 취소 알림**\n\n"
+                            f"참여하고 계신 **'{party_data.purpose}'** 파티가 파티장에 의해 취소되었습니다.\n"
+                            f"출발 예정 시간: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
+                        )
+                    except:
+                        # DM 전송 실패 시 무시 (DM 차단된 경우 등)
+                        pass
+        except Exception as e:
+            print(f"파티 취소 알림 전송 오류: {e}")
+    
     # 모든 멤버의 파티 상태 해제
     for member_id in party_data.members:
         if member_id in user_party_status:
@@ -680,29 +711,29 @@ async def disband_party_function(interaction: discord.Interaction, party_data: P
     if party_data.message_id in parties:
         del parties[party_data.message_id]
     
-    # 원본 메시지 업데이트
+    # 원본 메시지 삭제
     try:
         channel = bot.get_channel(party_data.channel_id)
         message = await channel.fetch_message(party_data.message_id)
         
-        disband_embed = discord.Embed(
-            title="파티 모집 해체",
-            description=f"**{party_data.purpose}** 파티 모집이 해체되었습니다.",
-            color=discord.Color.red()
-        )
+        # 메시지 완전 삭제
+        await message.delete()
         
-        disband_embed.add_field(
-            name="해체 사유",
-            value="파티장에 의한 모집 취소",
-            inline=False
-        )
+        # 취소 완료 응답
+        cancel_message = f"✅ **'{party_data.purpose}'** 파티 모집이 취소되었습니다.\n모집창이 삭제되었습니다."
         
-        await message.edit(embed=disband_embed, view=None)
-    except:
-        pass  # 메시지를 찾을 수 없는 경우 무시
-    
-    # 취소 완료 응답
-    await interaction.response.send_message("파티 모집이 취소되었습니다.", ephemeral=True)
+        if party_members:
+            cancel_message += f"\n📨 파티원 {len(party_members)}명에게 취소 알림을 전송했습니다."
+        
+        await interaction.response.send_message(cancel_message, ephemeral=True)
+        
+    except Exception as e:
+        print(f"파티 취소 오류: {e}")
+        # 메시지 삭제 실패 시 대체 응답
+        await interaction.response.send_message(
+            "파티 모집이 취소되었습니다.",
+            ephemeral=True
+        )
 
 @tasks.loop(minutes=1)
 async def check_notifications():
