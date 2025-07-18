@@ -483,53 +483,28 @@ class PartyView(discord.ui.View):
 
 @bot.event
 async def on_ready():
-    print('[DEBUG] on_ready event triggered!')
-    print(f'[DEBUG] Bot user: {bot.user}')
-    print('[DEBUG] Starting bot initialization...')
+    print('=== BOT READY EVENT TRIGGERED ===')
+    print(f'Bot logged in as: {bot.user}')
     
-    print(f'Discord Bot {bot.user} is now online!')
-    print(f'Bot logged in successfully')
-    
-    print('[DEBUG] Starting slash command sync...')
     try:
         synced = await bot.tree.sync()
-        print(f'Slash commands synced: {len(synced)} commands')
-        print('[DEBUG] Slash command sync completed successfully')
+        print(f'Synced {len(synced)} slash commands')
     except Exception as e:
-        print(f'[ERROR] Slash command sync failed: {e}')
-        import traceback
-        traceback.print_exc()
+        print(f'Sync error: {e}')
     
-    print('[DEBUG] Starting notification checker...')
     try:
-        # 알림 작업 시작
-        if not check_notifications.is_running():
-            check_notifications.start()
-            print('Notification checker started successfully')
-        else:
-            print('Notification checker was already running')
-        print('[DEBUG] Notification checker setup completed')
+        check_notifications.start()
+        print('Notification checker started')
     except Exception as e:
-        print(f'[ERROR] Failed to start notification checker: {e}')
-        import traceback
-        traceback.print_exc()
+        print(f'Notification checker error: {e}')
     
-    print('[DEBUG] Starting keep-alive system...')
     try:
-        # Keep-alive 작업 시작
-        if not keep_alive.is_running():
-            keep_alive.start()
-            print('Keep-alive system started (runs every 25 minutes)')
-        else:
-            print('Keep-alive system was already running')
-        print('[DEBUG] Keep-alive system setup completed')
+        keep_alive.start()
+        print('Keep-alive system started')
     except Exception as e:
-        print(f'[ERROR] Failed to start keep-alive system: {e}')
-        import traceback
-        traceback.print_exc()
+        print(f'Keep-alive error: {e}')
     
-    print('[DEBUG] Bot initialization completed successfully!')
-    print('Bot initialization completed successfully!')
+    print('=== BOT INITIALIZATION COMPLETE ===')
 
 @bot.tree.command(name="파티매칭", description="파티 모집을 시작합니다.")
 async def party_matching(interaction: discord.Interaction):
