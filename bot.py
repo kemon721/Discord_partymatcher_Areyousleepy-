@@ -194,13 +194,13 @@ class PartySetupModal(discord.ui.Modal):
                 
                 # 파티장에게 관리 방법 안내
                 await interaction.followup.send(
-                    "🎉 **파티가 성공적으로 생성되었습니다!**\n\n"
-                    "**파티 관리 방법:**\n"
-                    "• **파티장 전용 버튼**: `✅ 파티완료`, `❌ 파티취소`\n"
-                    "• **슬래시 명령어**: `/파티완료`, `/파티취소`\n\n"
-                    "**파티원들은 파티원 전용 버튼을 사용할 수 있습니다:**\n"
-                    "• `📥 참여하기`, `📤 나가기`\n\n"
-                    "💡 **팁**: 버튼과 슬래시 명령어 모두 동일한 기능을 제공합니다!",
+                    "🎉 **Party successfully created!**\n\n"
+                    "**Party management:**\n"
+                    "• **Leader-only buttons**: `✅ Complete Party`, `❌ Disband Party`\n"
+                    "• **Slash commands**: `/completeparty`, `/disbandparty`\n\n"
+                    "**Party members can use:**\n"
+                    "• `📥 Join Party`, `📤 Leave Party`\n\n"
+                    "💡 **Tip**: Both buttons and slash commands provide the same functionality!",
                     ephemeral=True
                 )
                 
@@ -208,22 +208,22 @@ class PartySetupModal(discord.ui.Modal):
                 asyncio.create_task(trigger_keep_alive())
                 
             except Exception as e:
-                print(f"파티 설정 후처리 오류: {e}")
+                print(f"Party setup post-processing error: {e}")
                 # 이미 응답은 보냈으므로 사용자에게는 정상적으로 보임
                 
         except ValueError as e:
             # interaction이 아직 응답되지 않은 경우에만 응답
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "입력한 날짜/시간 형식이 올바르지 않습니다. YYMMDD HH:MM 형식으로 입력해주세요. (예: 250715 20:50)",
+                    "Invalid date/time format. Please enter in YYMMDD HH:MM format (e.g., 250715 20:50).",
                     ephemeral=True
                 )
         except Exception as e:
-            print(f"파티 생성 오류: {e}")
+            print(f"Party creation error: {e}")
             # interaction이 아직 응답되지 않은 경우에만 응답
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    f"오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                    f"An error occurred. Please try again later.",
                     ephemeral=True
                 )
 
@@ -233,33 +233,33 @@ class PartySetupModal(discord.ui.Modal):
 def create_party_embed(party_data: PartyData, leader: discord.User):
     if party_data.is_completed:
         embed = discord.Embed(
-            title="파티 모집 완료",
-            description=f"**목적:** {party_data.purpose}",
+            title="Party Recruitment Complete",
+            description=f"**Purpose:** {party_data.purpose}",
             color=discord.Color.green()
         )
     elif party_data.is_full:
         embed = discord.Embed(
-            title="파티 모집 마감",
-            description=f"**목적:** {party_data.purpose}",
+            title="Party Recruitment Closed",
+            description=f"**Purpose:** {party_data.purpose}",
             color=discord.Color.orange()
         )
     else:
         embed = discord.Embed(
-            title="파티 모집",
-            description=f"**목적:** {party_data.purpose}",
+            title="Party Recruitment",
+            description=f"**Purpose:** {party_data.purpose}",
             color=discord.Color.blue()
         )
     
     # 파티장 정보
     embed.add_field(
-        name="파티장",
+        name="Leader",
         value=leader.display_name if leader else f"<@{party_data.leader_id}>",
         inline=True
     )
     
     # 출발 시간
     embed.add_field(
-        name="출발 시간",
+        name="Departure Time",
         value=party_data.departure_time.strftime("%Y년 %m월 %d일 %H:%M"),
         inline=True
     )
@@ -267,8 +267,8 @@ def create_party_embed(party_data: PartyData, leader: discord.User):
     # 인원 현황
     current_members = len(party_data.members)
     embed.add_field(
-        name="인원 현황",
-        value=f"{current_members}/{party_data.max_members}명",
+        name="Current Members",
+        value=f"{current_members}/{party_data.max_members} members",
         inline=True
     )
     
@@ -276,7 +276,7 @@ def create_party_embed(party_data: PartyData, leader: discord.User):
     if party_data.spec_cuts:
         spec_text = "\n".join([f"• {spec}" for spec in party_data.spec_cuts])
         embed.add_field(
-            name="스펙컷",
+            name="Spec Cuts",
             value=spec_text,
             inline=False
         )
@@ -284,7 +284,7 @@ def create_party_embed(party_data: PartyData, leader: discord.User):
     # 비고
     if party_data.notes:
         embed.add_field(
-            name="비고",
+            name="Notes",
             value=party_data.notes,
             inline=False
         )
@@ -294,7 +294,7 @@ def create_party_embed(party_data: PartyData, leader: discord.User):
         member_list = []
         for i, member_id in enumerate(party_data.members, 1):
             user = bot.get_user(member_id)
-            role = "파티장" if member_id == party_data.leader_id else "멤버"
+            role = "Leader" if member_id == party_data.leader_id else "Member"
             
             if user:
                 member_list.append(f"{i}. {user.display_name} ({role})")
@@ -302,7 +302,7 @@ def create_party_embed(party_data: PartyData, leader: discord.User):
                 member_list.append(f"{i}. <@{member_id}> ({role})")
         
         embed.add_field(
-            name="참여 멤버",
+            name="Party Members",
             value="\n".join(member_list),
             inline=False
         )
@@ -322,7 +322,7 @@ class PartyView(discord.ui.View):
         
         # 파티원 전용: 참여하기 버튼
         join_button = discord.ui.Button(
-            label="📥 참여하기 (파티원용)",
+            label="📥 Join Party (Member)",
             style=discord.ButtonStyle.primary,
             custom_id="join_party"
         )
@@ -331,7 +331,7 @@ class PartyView(discord.ui.View):
         
         # 파티원 전용: 나가기 버튼
         leave_button = discord.ui.Button(
-            label="📤 나가기 (파티원용)",
+            label="📤 Leave Party (Member)",
             style=discord.ButtonStyle.secondary,
             custom_id="leave_party"
         )
@@ -340,7 +340,7 @@ class PartyView(discord.ui.View):
         
         # 파티장 전용: 파티완료 버튼
         complete_button = discord.ui.Button(
-            label="✅ 파티완료 (파티장용)",
+            label="✅ Complete Party (Leader)",
             style=discord.ButtonStyle.success,
             custom_id="complete_party"
         )
@@ -349,7 +349,7 @@ class PartyView(discord.ui.View):
         
         # 파티장 전용: 파티취소 버튼
         cancel_button = discord.ui.Button(
-            label="❌ 파티취소 (파티장용)",
+            label="❌ Disband Party (Leader)",
             style=discord.ButtonStyle.danger,
             custom_id="cancel_party"
         )
@@ -362,25 +362,25 @@ class PartyView(discord.ui.View):
         # 파티장인 경우 제한
         if user_id == self.party_data.leader_id:
             await interaction.response.send_message(
-                "🚫 **파티장은 파티원용 버튼을 사용할 수 없습니다.**\n"
-                "파티 관리를 위해 **파티장 전용 버튼**을 사용해주세요.",
+                "🚫 **You cannot use member buttons as the leader.**\n"
+                "Please use **leader-only buttons** to manage the party.",
                 ephemeral=True
             )
             return
         
         # 이미 다른 파티에 참여중인지 확인
         if user_id in user_party_status:
-            await interaction.response.send_message("이미 다른 파티에 참여중입니다.", ephemeral=True)
+            await interaction.response.send_message("You are already participating in another party.", ephemeral=True)
             return
         
         # 이미 참여한 경우
         if user_id in self.party_data.members:
-            await interaction.response.send_message("이미 파티에 참여하고 있습니다.", ephemeral=True)
+            await interaction.response.send_message("You are already a member of this party.", ephemeral=True)
             return
         
         # 파티가 가득 찬 경우
         if len(self.party_data.members) >= self.party_data.max_members:
-            await interaction.response.send_message("파티 인원이 가득 찼습니다.", ephemeral=True)
+            await interaction.response.send_message("The party is full.", ephemeral=True)
             return
         
         # 파티 참여
@@ -406,15 +406,15 @@ class PartyView(discord.ui.View):
         # 파티장인 경우 제한
         if user_id == self.party_data.leader_id:
             await interaction.response.send_message(
-                "🚫 **파티장은 파티원용 버튼을 사용할 수 없습니다.**\n"
-                "파티 관리를 위해 **파티장 전용 버튼**을 사용해주세요.",
+                "🚫 **You cannot use member buttons as the leader.**\n"
+                "Please use **leader-only buttons** to manage the party.",
                 ephemeral=True
             )
             return
         
         # 파티에 참여하지 않은 경우
         if user_id not in self.party_data.members:
-            await interaction.response.send_message("파티에 참여하고 있지 않습니다.", ephemeral=True)
+            await interaction.response.send_message("You are not a member of this party.", ephemeral=True)
             return
         
         # 파티 나가기
@@ -441,15 +441,15 @@ class PartyView(discord.ui.View):
         # 파티장 권한 확인
         if user_id != self.party_data.leader_id:
             await interaction.response.send_message(
-                "🚫 **파티장만 사용할 수 있는 기능입니다.**\n"
-                "파티원은 **파티원 전용 버튼**을 사용해주세요.",
+                "🚫 **You can only use this function as the leader.**\n"
+                "Party members should use **member-only buttons**.",
                 ephemeral=True
             )
             return
         
         # 이미 완료된 파티인지 확인
         if self.party_data.is_completed:
-            await interaction.response.send_message("이미 완료된 파티입니다.", ephemeral=True)
+            await interaction.response.send_message("This party is already completed.", ephemeral=True)
             return
         
         # 파티 완료 처리
@@ -464,45 +464,62 @@ class PartyView(discord.ui.View):
         # 파티장 권한 확인
         if user_id != self.party_data.leader_id:
             await interaction.response.send_message(
-                "🚫 **파티장만 사용할 수 있는 기능입니다.**\n"
-                "파티원은 **파티원 전용 버튼**을 사용해주세요.",
+                "🚫 **You can only use this function as the leader.**\n"
+                "Party members should use **member-only buttons**.",
                 ephemeral=True
             )
             return
         
         # 이미 완료된 파티인지 확인
         if self.party_data.is_completed:
-            await interaction.response.send_message("이미 완료된 파티는 취소할 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message("You cannot disband a completed party.", ephemeral=True)
             return
         
-        # 파티 취소 처리
-        await disband_party_function(interaction, self.party_data)
+        # 버튼 클릭으로 파티 취소 처리 (메시지 직접 삭제)
+        await cancel_party_by_button(interaction, self.party_data)
         
         # Keep-alive 트리거 (응답 후에 실행)
         asyncio.create_task(trigger_keep_alive())
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user}가 로그인했습니다!')
+    print(f'Discord Bot {bot.user} is now online!')
+    print(f'Bot logged in successfully')
+    
     try:
         synced = await bot.tree.sync()
-        print(f"슬래시 명령어 {len(synced)}개가 동기화되었습니다.")
+        print(f'Slash commands synced: {len(synced)} commands')
     except Exception as e:
-        print(f"슬래시 명령어 동기화 실패: {e}")
+        print(f'Slash command sync failed: {e}')
     
-    # 알림 작업 시작
-    check_notifications.start()
+    try:
+        # 알림 작업 시작
+        if not check_notifications.is_running():
+            check_notifications.start()
+            print('Notification checker started successfully')
+        else:
+            print('Notification checker was already running')
+    except Exception as e:
+        print(f'Failed to start notification checker: {e}')
     
-    # Keep-alive 작업 시작
-    keep_alive.start()
-    print("Keep-alive 시스템이 시작되었습니다 (25분마다 실행)")
+    try:
+        # Keep-alive 작업 시작
+        if not keep_alive.is_running():
+            keep_alive.start()
+            print('Keep-alive system started (runs every 25 minutes)')
+        else:
+            print('Keep-alive system was already running')
+    except Exception as e:
+        print(f'Failed to start keep-alive system: {e}')
+    
+    print('Bot initialization completed successfully!')
 
 @bot.tree.command(name="파티매칭", description="파티 모집을 시작합니다.")
 async def party_matching(interaction: discord.Interaction):
     # 이미 파티에 참여중인지 확인
     if interaction.user.id in user_party_status:
         await interaction.response.send_message(
-            "이미 파티에 참여중입니다. 한 번에 하나의 파티에만 참여할 수 있습니다.",
+            "You are already participating in a party. You can only participate in one party at a time.",
             ephemeral=True
         )
         return
@@ -519,24 +536,24 @@ async def complete_party_command(interaction: discord.Interaction):
     
     # 사용자가 파티에 참여중인지 확인
     if user_id not in user_party_status:
-        await interaction.response.send_message("참여중인 파티가 없습니다.", ephemeral=True)
+        await interaction.response.send_message("You are not participating in a party.", ephemeral=True)
         return
     
     party_message_id = user_party_status[user_id]
     if party_message_id not in parties:
-        await interaction.response.send_message("파티 정보를 찾을 수 없습니다.", ephemeral=True)
+        await interaction.response.send_message("Party information not found.", ephemeral=True)
         return
     
     party_data = parties[party_message_id]
     
     # 파티장 권한 확인
     if user_id != party_data.leader_id:
-        await interaction.response.send_message("파티장만 활동 완료 처리를 할 수 있습니다.", ephemeral=True)
+        await interaction.response.send_message("Only the leader can complete the party activity.", ephemeral=True)
         return
     
     # 이미 완료된 파티인지 확인
     if party_data.is_completed:
-        await interaction.response.send_message("이미 완료된 파티입니다.", ephemeral=True)
+        await interaction.response.send_message("This party is already completed.", ephemeral=True)
         return
     
     # 파티 완료 처리
@@ -551,24 +568,24 @@ async def disband_party_command(interaction: discord.Interaction):
     
     # 사용자가 파티에 참여중인지 확인
     if user_id not in user_party_status:
-        await interaction.response.send_message("참여중인 파티가 없습니다.", ephemeral=True)
+        await interaction.response.send_message("You are not participating in a party.", ephemeral=True)
         return
     
     party_message_id = user_party_status[user_id]
     if party_message_id not in parties:
-        await interaction.response.send_message("파티 정보를 찾을 수 없습니다.", ephemeral=True)
+        await interaction.response.send_message("Party information not found.", ephemeral=True)
         return
     
     party_data = parties[party_message_id]
     
     # 파티장 권한 확인
     if user_id != party_data.leader_id:
-        await interaction.response.send_message("파티장만 모집을 취소할 수 있습니다.", ephemeral=True)
+        await interaction.response.send_message("Only the leader can cancel the recruitment.", ephemeral=True)
         return
     
     # 이미 완료된 파티인지 확인
     if party_data.is_completed:
-        await interaction.response.send_message("이미 완료된 파티는 취소할 수 없습니다.", ephemeral=True)
+        await interaction.response.send_message("You cannot cancel a completed party.", ephemeral=True)
         return
     
     # 파티 취소 처리
@@ -601,8 +618,8 @@ async def complete_party_function(interaction: discord.Interaction, party_data: 
     
     # 파티 완료 기록을 채널에 남김
     completion_embed = discord.Embed(
-        title="파티 활동 완료 기록",
-        description=f"**{party_data.purpose}** 파티가 성공적으로 완료되었습니다!",
+        title="Party Activity Completion Record",
+        description=f"**{party_data.purpose}** party has been successfully completed!",
         color=discord.Color.green(),
         timestamp=completion_time
     )
@@ -610,19 +627,19 @@ async def complete_party_function(interaction: discord.Interaction, party_data: 
     # 파티 정보
     leader = bot.get_user(party_data.leader_id)
     completion_embed.add_field(
-        name="파티장",
+        name="Leader",
         value=leader.display_name if leader else f"<@{party_data.leader_id}>",
         inline=True
     )
     
     completion_embed.add_field(
-        name="출발 시간",
+        name="Departure Time",
         value=party_data.departure_time.strftime("%Y년 %m월 %d일 %H:%M"),
         inline=True
     )
     
     completion_embed.add_field(
-        name="완료 시간",
+        name="Completion Time",
         value=completion_time.strftime("%Y년 %m월 %d일 %H:%M"),
         inline=True
     )
@@ -631,7 +648,7 @@ async def complete_party_function(interaction: discord.Interaction, party_data: 
     member_list = []
     for i, member_id in enumerate(party_data.members, 1):
         user = bot.get_user(member_id)
-        role = "파티장" if member_id == party_data.leader_id else "멤버"
+        role = "Leader" if member_id == party_data.leader_id else "Member"
         
         if user:
             member_list.append(f"{i}. {user.display_name} ({role})")
@@ -639,7 +656,7 @@ async def complete_party_function(interaction: discord.Interaction, party_data: 
             member_list.append(f"{i}. <@{member_id}> ({role})")
     
     completion_embed.add_field(
-        name=f"참여 멤버 ({len(party_data.members)}명)",
+        name=f"Party Members ({len(party_data.members)} members)",
         value="\n".join(member_list),
         inline=False
     )
@@ -648,7 +665,7 @@ async def complete_party_function(interaction: discord.Interaction, party_data: 
     if party_data.spec_cuts:
         spec_text = "\n".join([f"• {spec}" for spec in party_data.spec_cuts])
         completion_embed.add_field(
-            name="스펙컷",
+            name="Spec Cuts",
             value=spec_text,
             inline=False
         )
@@ -659,17 +676,17 @@ async def complete_party_function(interaction: discord.Interaction, party_data: 
     minutes = int((activity_duration.total_seconds() % 3600) // 60)
     
     if hours > 0:
-        duration_text = f"{hours}시간 {minutes}분"
+        duration_text = f"{hours} hours {minutes} minutes"
     else:
-        duration_text = f"{minutes}분"
+        duration_text = f"{minutes} minutes"
     
     completion_embed.add_field(
-        name="활동 시간",
+        name="Activity Duration",
         value=duration_text,
         inline=True
     )
     
-    completion_embed.set_footer(text="파티 시스템에 의해 자동 기록됨")
+    completion_embed.set_footer(text="Automatically recorded by the party system")
     
     # 완료 기록을 채널에 전송
     await interaction.response.send_message(embed=completion_embed)
@@ -678,8 +695,8 @@ async def complete_party_function(interaction: discord.Interaction, party_data: 
     if party_data.message_id in parties:
         del parties[party_data.message_id]
 
-async def disband_party_function(interaction: discord.Interaction, party_data: PartyData):
-    """파티 취소 처리 함수"""
+async def cancel_party_by_button(interaction: discord.Interaction, party_data: PartyData):
+    """버튼 클릭으로 파티 취소 처리 (메시지 직접 삭제)"""
     
     # 파티원들에게 취소 알림 전송 (파티장 제외)
     party_members = [member_id for member_id in party_data.members if member_id != party_data.leader_id]
@@ -692,15 +709,72 @@ async def disband_party_function(interaction: discord.Interaction, party_data: P
                 if user:
                     try:
                         await user.send(
-                            f"📢 **파티 취소 알림**\n\n"
-                            f"참여하고 계신 **'{party_data.purpose}'** 파티가 파티장에 의해 취소되었습니다.\n"
-                            f"출발 예정 시간: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
+                            f"📢 **Party Disband Notification**\n\n"
+                            f"Your participating **'{party_data.purpose}'** party has been disbanded by the leader.\n"
+                            f"Expected departure time: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
                         )
                     except:
                         # DM 전송 실패 시 무시 (DM 차단된 경우 등)
                         pass
         except Exception as e:
-            print(f"파티 취소 알림 전송 오류: {e}")
+            print(f"Party disband notification sending error: {e}")
+    
+    # 모든 멤버의 파티 상태 해제
+    for member_id in party_data.members:
+        if member_id in user_party_status:
+            del user_party_status[member_id]
+    
+    # 파티 데이터 삭제
+    if party_data.message_id in parties:
+        del parties[party_data.message_id]
+    
+    try:
+        # 파티장에게 취소 완료 응답 (먼저 응답)
+        cancel_message = f"✅ **'{party_data.purpose}'** party recruitment has been cancelled.\nDeleting the recruitment message."
+        
+        if party_members:
+            cancel_message += f"\n📨 Sent disband notifications to {len(party_members)} members."
+        
+        await interaction.response.send_message(cancel_message, ephemeral=True)
+        
+        # 그 다음 메시지 삭제 (버튼이 있는 원본 메시지)
+        await interaction.message.delete()
+        
+    except Exception as e:
+        print(f"Button party disband error: {e}")
+        # 메시지 삭제 실패 시 대체 응답
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "Party recruitment has been cancelled.",
+                    ephemeral=True
+                )
+        except:
+            pass
+
+async def disband_party_function(interaction: discord.Interaction, party_data: PartyData):
+    """파티 취소 처리 함수 (슬래시 명령어용)"""
+    
+    # 파티원들에게 취소 알림 전송 (파티장 제외)
+    party_members = [member_id for member_id in party_data.members if member_id != party_data.leader_id]
+    
+    if party_members:
+        try:
+            # 파티원들에게 DM으로 알림
+            for member_id in party_members:
+                user = bot.get_user(member_id)
+                if user:
+                    try:
+                        await user.send(
+                            f"📢 **Party Disband Notification**\n\n"
+                            f"Your participating **'{party_data.purpose}'** party has been disbanded by the leader.\n"
+                            f"Expected departure time: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
+                        )
+                    except:
+                        # DM 전송 실패 시 무시 (DM 차단된 경우 등)
+                        pass
+        except Exception as e:
+            print(f"Party disband notification sending error: {e}")
     
     # 모든 멤버의 파티 상태 해제
     for member_id in party_data.members:
@@ -720,18 +794,18 @@ async def disband_party_function(interaction: discord.Interaction, party_data: P
         await message.delete()
         
         # 취소 완료 응답
-        cancel_message = f"✅ **'{party_data.purpose}'** 파티 모집이 취소되었습니다.\n모집창이 삭제되었습니다."
+        cancel_message = f"✅ **'{party_data.purpose}'** party recruitment has been cancelled.\nThe recruitment message has been deleted."
         
         if party_members:
-            cancel_message += f"\n📨 파티원 {len(party_members)}명에게 취소 알림을 전송했습니다."
+            cancel_message += f"\n📨 Sent disband notifications to {len(party_members)} members."
         
         await interaction.response.send_message(cancel_message, ephemeral=True)
         
     except Exception as e:
-        print(f"파티 취소 오류: {e}")
+        print(f"Party disband error: {e}")
         # 메시지 삭제 실패 시 대체 응답
         await interaction.response.send_message(
-            "파티 모집이 취소되었습니다.",
+            "Party recruitment has been cancelled.",
             ephemeral=True
         )
 
@@ -752,14 +826,14 @@ async def check_notifications():
                         # 참여 멤버들에게 알림
                         mentions = " ".join([f"<@{member_id}>" for member_id in party_data.members])
                         await channel.send(
-                            f"**파티 출발 알림**\n"
+                            f"**Party Departure Notification**\n"
                             f"{mentions}\n"
-                            f"'{party_data.purpose}' 파티가 10분 후 출발합니다!\n"
-                            f"출발 시간: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
+                            f"'{party_data.purpose}' party will depart in 10 minutes!\n"
+                            f"Departure time: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
                         )
                         party_data.notification_sent = True
                 except Exception as e:
-                    print(f"알림 전송 오류: {e}")
+                    print(f"Notification sending error: {e}")
 
 @tasks.loop(minutes=25)
 async def keep_alive():
@@ -774,11 +848,11 @@ async def keep_alive():
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{render_url}/ping") as response:
                 if response.status == 200:
-                    print(f"Keep-alive ping 성공: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    print(f"Keep-alive ping successful: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 else:
-                    print(f"Keep-alive ping 실패: {response.status}")
+                    print(f"Keep-alive ping failed: {response.status}")
     except Exception as e:
-        print(f"Keep-alive 오류: {e}")
+        print(f"Keep-alive error: {e}")
 
 async def trigger_keep_alive():
     """Discord 활동이 있을 때 즉시 keep-alive 실행"""
@@ -790,9 +864,9 @@ async def trigger_keep_alive():
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{render_url}/ping") as response:
                 if response.status == 200:
-                    print(f"활동 기반 keep-alive 성공: {datetime.now().strftime('%H:%M:%S')}")
+                    print(f"Activity-based keep-alive successful: {datetime.now().strftime('%H:%M:%S')}")
     except Exception as e:
-        print(f"활동 기반 keep-alive 오류: {e}")
+        print(f"Activity-based keep-alive error: {e}")
 
 # 봇 실행
 if __name__ == "__main__":
