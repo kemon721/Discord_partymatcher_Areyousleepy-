@@ -8,6 +8,7 @@ import config
 import threading
 from flask import Flask
 import os
+import aiohttp
 
 # Flask 앱 생성 (keep-alive용)
 app = Flask(__name__)
@@ -343,6 +344,9 @@ class PartyView(discord.ui.View):
         self.add_item(cancel_button)
     
     async def join_party(self, interaction: discord.Interaction):
+        # Keep-alive 트리거
+        asyncio.create_task(trigger_keep_alive())
+        
         user_id = interaction.user.id
         
         # 파티장인 경우 제한
@@ -384,6 +388,9 @@ class PartyView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
     
     async def leave_party(self, interaction: discord.Interaction):
+        # Keep-alive 트리거
+        asyncio.create_task(trigger_keep_alive())
+        
         user_id = interaction.user.id
         
         # 파티장인 경우 제한
@@ -416,6 +423,9 @@ class PartyView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
     
     async def complete_party(self, interaction: discord.Interaction):
+        # Keep-alive 트리거
+        asyncio.create_task(trigger_keep_alive())
+        
         user_id = interaction.user.id
         
         # 파티장 권한 확인
@@ -436,6 +446,9 @@ class PartyView(discord.ui.View):
         await complete_party_function(interaction, self.party_data)
     
     async def cancel_party(self, interaction: discord.Interaction):
+        # Keep-alive 트리거
+        asyncio.create_task(trigger_keep_alive())
+        
         user_id = interaction.user.id
         
         # 파티장 권한 확인
@@ -466,9 +479,16 @@ async def on_ready():
     
     # 알림 작업 시작
     check_notifications.start()
+    
+    # Keep-alive 작업 시작
+    keep_alive.start()
+    print("Keep-alive 시스템이 시작되었습니다 (25분마다 실행)")
 
 @bot.tree.command(name="파티매칭", description="파티 모집을 시작합니다.")
 async def party_matching(interaction: discord.Interaction):
+    # Keep-alive 트리거 (비동기로 실행)
+    asyncio.create_task(trigger_keep_alive())
+    
     # 이미 파티에 참여중인지 확인
     if interaction.user.id in user_party_status:
         await interaction.response.send_message(
@@ -482,6 +502,9 @@ async def party_matching(interaction: discord.Interaction):
 
 @bot.tree.command(name="파티완료", description="파티장만 사용 가능: 파티 활동을 완료 처리합니다.")
 async def complete_party_command(interaction: discord.Interaction):
+    # Keep-alive 트리거
+    asyncio.create_task(trigger_keep_alive())
+    
     user_id = interaction.user.id
     
     # 사용자가 파티에 참여중인지 확인
@@ -511,6 +534,9 @@ async def complete_party_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="파티취소", description="파티장만 사용 가능: 파티 모집을 취소합니다.")
 async def disband_party_command(interaction: discord.Interaction):
+    # Keep-alive 트리거
+    asyncio.create_task(trigger_keep_alive())
+    
     user_id = interaction.user.id
     
     # 사용자가 파티에 참여중인지 확인
@@ -700,6 +726,39 @@ async def check_notifications():
                         party_data.notification_sent = True
                 except Exception as e:
                     print(f"알림 전송 오류: {e}")
+
+@tasks.loop(minutes=25)
+async def keep_alive():
+    """25분마다 자신의 서버에 요청을 보내서 잠들지 않도록 함"""
+    try:
+        # Render URL 가져오기
+        render_url = os.environ.get('RENDER_EXTERNAL_URL')
+        if not render_url:
+            # 환경변수가 없으면 기본 URL 사용
+            render_url = "https://discord-partymatcher-areyousleepy.onrender.com"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{render_url}/ping") as response:
+                if response.status == 200:
+                    print(f"Keep-alive ping 성공: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                else:
+                    print(f"Keep-alive ping 실패: {response.status}")
+    except Exception as e:
+        print(f"Keep-alive 오류: {e}")
+
+async def trigger_keep_alive():
+    """Discord 활동이 있을 때 즉시 keep-alive 실행"""
+    try:
+        render_url = os.environ.get('RENDER_EXTERNAL_URL')
+        if not render_url:
+            render_url = "https://discord-partymatcher-areyousleepy.onrender.com"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{render_url}/ping") as response:
+                if response.status == 200:
+                    print(f"활동 기반 keep-alive 성공: {datetime.now().strftime('%H:%M:%S')}")
+    except Exception as e:
+        print(f"활동 기반 keep-alive 오류: {e}")
 
 # 봇 실행
 if __name__ == "__main__":
