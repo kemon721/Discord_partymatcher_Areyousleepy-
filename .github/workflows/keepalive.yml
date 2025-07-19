@@ -1,0 +1,20 @@
+name: Keep Render Alive
+
+# GitHub Actions workflow to keep Render service alive
+on:
+  workflow_dispatch:  # 수동 실행 가능
+  schedule:
+    - cron: '*/5 * * * *'  # 5분마다 실행
+  push:  # 푸시할 때도 실행
+    branches: [ main, master ]
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render Service
+        run: |
+          echo "Pinging Render service..."
+          echo "Current time: $(date)"
+          curl -f https://discord-partymatcher-areyousleepy.onrender.com || echo "Ping failed but continuing..."
+          echo "Keep-alive ping completed successfully!" 
