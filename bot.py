@@ -6,6 +6,34 @@ from datetime import datetime, timedelta
 import json
 import config
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# 간단한 HTTP 서버 (Render 포트 감지용)
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.end_headers()
+        if self.path == '/health':
+            status = "연결됨" if bot.is_ready() else "연결중"
+            self.wfile.write(f"Discord Bot 상태: {status}".encode('utf-8'))
+        else:
+            self.wfile.write("Discord Bot이 실행중입니다!".encode('utf-8'))
+    
+    def log_message(self, format, *args):
+        # HTTP 서버 로그 출력 비활성화
+        return
+
+def start_http_server():
+    """HTTP 서버 시작 (Render 포트 감지용)"""
+    try:
+        port = int(os.environ.get('PORT', 10000))
+        server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+        print(f"HTTP server started on port {port}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"HTTP server error: {e}")
 
 # 인텐트 설정 - 모든 인텐트 활성화
 intents = discord.Intents.all()
@@ -779,4 +807,8 @@ async def check_notifications():
 
 # 봇 실행
 if __name__ == "__main__":
+    # HTTP 서버 시작
+    http_thread = threading.Thread(target=start_http_server, daemon=True)
+    http_thread.start()
+
     bot.run(config.DISCORD_TOKEN) 
