@@ -8,6 +8,8 @@ import config
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import aiohttp
+import urllib.parse
 
 # 간단한 HTTP 서버 (Render 포트 감지용)
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -805,6 +807,302 @@ async def check_notifications():
                 except Exception as e:
                     print(f"Notification sending error: {e}")
 
+# ============================================
+# 마비노기 경매장 기능
+# ============================================
+
+# 마비노기 아이템 카테고리 리스트
+MABINOGI_CATEGORIES = [
+    "개조석", "검", "경갑옷", "기타", "기타 소모품", "기타 스크롤", "기타 장비", 
+    "기타 재료", "꼬리", "날개", "낭만농장/달빛섬", "너클", "던전 통행증", "도끼", 
+    "도면", "둔기", "듀얼건", "랜스", "로브", "마기그래프", "마기그래프 도안", 
+    "마도서", "마리오네트", "마법가루", "마비노벨", "마족 스크롤", "말풍선 스티커", 
+    "매직 크래프트", "모자/가발", "방패", "변신 메달", "보석", "분양 메달", 
+    "불타래", "뷰티 쿠폰", "생활 도구", "석궁", "수리검", "스케치", "스태프", 
+    "신발", "실린더", "아틀라틀", "악기", "알반 훈련석", "액세서리", "양손 장비", 
+    "얼굴 장식", "에이도스", "에코스톤", "염색 앰플", "오브", "옷본", 
+    "원거리 소모품", "원드", "음식", "의자/사물", "인챈트 스크롤", "장갑", 
+    "제련/블랙스미스", "제스처", "주머니", "중갑옷", "책", "천옷", "천옷/방직", 
+    "체인 블레이드", "토템", "팔리아스 유물", "퍼퓸", "페이지", "포션", 
+    "피니 펫", "핀즈비즈", "한손 장비", "핸들", "허브", "활", "힐웬 공학"
+]
+
+async def call_mabinogi_api(endpoint: str, params: dict = None):
+    """마비노기 API 호출 함수"""
+    url = f"{config.MABINOGI_API_BASE_URL}{endpoint}"
+    headers = {
+        "x-nxopen-api-key": config.MABINOGI_API_KEY,
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    print(f"API Error: {response.status} - {await response.text()}")
+                    return None
+    except Exception as e:
+        print(f"API Exception: {e}")
+        return None
+
+async def search_auction_items(item_name: str = None, category: str = None, keyword: str = None, cursor: str = ""):
+    """경매장 아이템 검색"""
+    params = {"cursor": cursor}
+    
+    if keyword:
+        endpoint = "/mabinogi/v1/auction/keyword-search"
+        params["keyword"] = keyword
+    else:
+        endpoint = "/mabinogi/v1/auction/list"
+        if item_name:
+            params["item_name"] = item_name
+        if category:
+            params["auction_item_category"] = category
+    
+    return await call_mabinogi_api(endpoint, params)
+
+async def search_auction_history(item_name: str = None, category: str = None, cursor: str = ""):
+    """경매장 거래 내역 조회"""
+    params = {"cursor": cursor}
+    
+    if item_name:
+        params["item_name"] = item_name
+    if category:
+        params["auction_item_category"] = category
+    
+    return await call_mabinogi_api("/mabinogi/v1/auction/history", params)
+
+class AuctionSearchModal(discord.ui.Modal):
+    def __init__(self):
+        super().__init__(title="마비노기 경매장 검색")
+        
+        # 검색 방식 선택 (아이템명/키워드)
+        self.search_type = discord.ui.TextInput(
+            label="검색 방식",
+            placeholder="1: 아이템명 검색, 2: 키워드 검색, 3: 거래내역 조회",
+            required=True,
+            max_length=1
+        )
+        
+        # 검색어
+        self.search_term = discord.ui.TextInput(
+            label="검색어",
+            placeholder="검색할 아이템명 또는 키워드를 입력하세요",
+            required=True,
+            max_length=100
+        )
+        
+        # 카테고리 (선택사항)
+        self.category = discord.ui.TextInput(
+            label="카테고리 (선택사항)",
+            placeholder="예: 검, 방패, 포션 등 (빈칸 가능)",
+            required=False,
+            max_length=50
+        )
+        
+        self.add_item(self.search_type)
+        self.add_item(self.search_term)
+        self.add_item(self.category)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            search_type = self.search_type.value.strip()
+            search_term = self.search_term.value.strip()
+            category = self.category.value.strip() if self.category.value.strip() else None
+            
+            # 검색 방식 유효성 검사
+            if search_type not in ['1', '2', '3']:
+                await interaction.response.send_message(
+                    "❌ 검색 방식은 1(아이템명), 2(키워드), 3(거래내역) 중 하나를 입력해주세요.",
+                    ephemeral=True
+                )
+                return
+            
+            # 카테고리 유효성 검사
+            if category and category not in MABINOGI_CATEGORIES:
+                await interaction.response.send_message(
+                    f"❌ 올바르지 않은 카테고리입니다.\n"
+                    f"**사용 가능한 카테고리:** {', '.join(MABINOGI_CATEGORIES[:10])}...",
+                    ephemeral=True
+                )
+                return
+            
+            await interaction.response.defer()
+            
+            # API 호출
+            if search_type == '1':  # 아이템명 검색
+                result = await search_auction_items(item_name=search_term, category=category)
+            elif search_type == '2':  # 키워드 검색
+                result = await search_auction_items(keyword=search_term, category=category)
+            else:  # 거래내역 조회
+                result = await search_auction_history(item_name=search_term, category=category)
+            
+            if not result:
+                await interaction.followup.send("❌ API 호출에 실패했습니다. 잠시 후 다시 시도해주세요.")
+                return
+            
+            # 결과가 없는 경우
+            items_key = "auction_item" if search_type != '3' else "auction_history"
+            items = result.get(items_key, [])
+            
+            if not items:
+                search_type_text = "아이템명" if search_type == '1' else "키워드" if search_type == '2' else "거래내역"
+                await interaction.followup.send(f"🔍 **{search_type_text} 검색 결과**\n검색어: `{search_term}`\n\n❌ 검색 결과가 없습니다.")
+                return
+            
+            # 결과 표시
+            embed = create_auction_embed(items, search_term, search_type, 0)
+            view = AuctionView(items, search_term, search_type, result.get("next_cursor"))
+            
+            await interaction.followup.send(embed=embed, view=view)
+            
+        except Exception as e:
+            print(f"Auction search error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                    ephemeral=True
+                )
+
+def create_auction_embed(items: list, search_term: str, search_type: str, page: int):
+    """경매장 검색 결과 임베드 생성"""
+    search_type_text = "아이템명" if search_type == '1' else "키워드" if search_type == '2' else "거래내역"
+    
+    if search_type == '3':  # 거래내역
+        embed = discord.Embed(
+            title="💰 마비노기 경매장 거래내역",
+            description=f"**{search_type_text} 검색:** `{search_term}`",
+            color=discord.Color.gold()
+        )
+    else:  # 현재 매물
+        embed = discord.Embed(
+            title="🏪 마비노기 경매장 검색",
+            description=f"**{search_type_text} 검색:** `{search_term}`",
+            color=discord.Color.blue()
+        )
+    
+    # 페이지 처리 (한 페이지에 5개씩)
+    items_per_page = 5
+    start_idx = page * items_per_page
+    end_idx = start_idx + items_per_page
+    page_items = items[start_idx:end_idx]
+    
+    if not page_items:
+        embed.add_field(
+            name="❌ 검색 결과 없음",
+            value="해당 페이지에 표시할 아이템이 없습니다.",
+            inline=False
+        )
+        return embed
+    
+    for i, item in enumerate(page_items, 1):
+        # 가격 포맷팅
+        price = item.get('auction_price_per_unit', 0)
+        price_text = f"{price:,}골드"
+        
+        # 만료/거래 시간
+        if search_type == '3':  # 거래내역
+            time_field = item.get('date_auction_buy', '')
+            time_text = f"거래시간: {time_field.replace('T', ' ').replace('Z', ' UTC')}"
+        else:  # 현재 매물
+            time_field = item.get('date_auction_expire', '')
+            time_text = f"만료시간: {time_field.replace('T', ' ').replace('Z', ' UTC')}"
+        
+        # 아이템 정보
+        item_name = item.get('item_display_name', item.get('item_name', '알 수 없음'))
+        item_count = item.get('item_count', 1)
+        category = item.get('auction_item_category', '기타')
+        
+        count_text = f" x{item_count}" if item_count > 1 else ""
+        
+        embed.add_field(
+            name=f"{start_idx + i}. {item_name}{count_text}",
+            value=f"💰 **{price_text}** (개당)\n"
+                  f"📁 카테고리: {category}\n"
+                  f"⏰ {time_text}",
+            inline=False
+        )
+    
+    # 페이지 정보
+    total_pages = (len(items) - 1) // items_per_page + 1
+    embed.set_footer(text=f"페이지 {page + 1}/{total_pages} • 총 {len(items)}개 아이템")
+    
+    return embed
+
+class AuctionView(discord.ui.View):
+    def __init__(self, items: list, search_term: str, search_type: str, next_cursor: str = None):
+        super().__init__(timeout=300)  # 5분 타임아웃
+        self.items = items
+        self.search_term = search_term
+        self.search_type = search_type
+        self.next_cursor = next_cursor
+        self.current_page = 0
+        self.items_per_page = 5
+        self.total_pages = (len(items) - 1) // self.items_per_page + 1
+        
+        # 페이지가 1페이지뿐이면 이전/다음 버튼 비활성화
+        if self.total_pages <= 1:
+            self.prev_button.disabled = True
+            self.next_button.disabled = True
+    
+    @discord.ui.button(label="◀ 이전", style=discord.ButtonStyle.secondary)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            embed = create_auction_embed(self.items, self.search_term, self.search_type, self.current_page)
+            await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            await interaction.response.send_message("❌ 첫 번째 페이지입니다.", ephemeral=True)
+    
+    @discord.ui.button(label="▶ 다음", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+            embed = create_auction_embed(self.items, self.search_term, self.search_type, self.current_page)
+            await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            await interaction.response.send_message("❌ 마지막 페이지입니다.", ephemeral=True)
+    
+    @discord.ui.button(label="🔄 새로고침", style=discord.ButtonStyle.primary)
+    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        
+        try:
+            # API 재호출
+            if self.search_type == '1':  # 아이템명 검색
+                result = await search_auction_items(item_name=self.search_term)
+            elif self.search_type == '2':  # 키워드 검색
+                result = await search_auction_items(keyword=self.search_term)
+            else:  # 거래내역 조회
+                result = await search_auction_history(item_name=self.search_term)
+            
+            if result:
+                items_key = "auction_item" if self.search_type != '3' else "auction_history"
+                self.items = result.get(items_key, [])
+                self.next_cursor = result.get("next_cursor")
+                self.current_page = 0  # 첫 페이지로 리셋
+                self.total_pages = (len(self.items) - 1) // self.items_per_page + 1
+                
+                embed = create_auction_embed(self.items, self.search_term, self.search_type, self.current_page)
+                await interaction.followup.edit_message(interaction.message.id, embed=embed, view=self)
+            else:
+                await interaction.followup.send("❌ 새로고침에 실패했습니다.", ephemeral=True)
+                
+        except Exception as e:
+            print(f"Refresh error: {e}")
+            await interaction.followup.send("❌ 새로고침 중 오류가 발생했습니다.", ephemeral=True)
+
+@bot.tree.command(name="경매장", description="마비노기 경매장에서 아이템을 검색합니다.")
+async def auction_search(interaction: discord.Interaction):
+    modal = AuctionSearchModal()
+    await interaction.response.send_modal(modal)
+
+# ============================================
+# 봇 실행
+# ============================================
+
 # 봇 실행
 if __name__ == "__main__":
     # HTTP 서버 시작
@@ -812,3 +1110,5 @@ if __name__ == "__main__":
     http_thread.start()
 
     bot.run(config.DISCORD_TOKEN) 
+
+    
