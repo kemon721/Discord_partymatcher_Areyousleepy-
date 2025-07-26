@@ -1190,7 +1190,7 @@ async def auction_search(interaction: discord.Interaction):
         # 모달 전송 실패 시 대체 방법 제공
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "🏪 **마비노기 경매장 검색 (임시 버전)**\n\n"
+                "**마비노기 경매장 검색 (임시 버전)**\n\n"
                 "현재 모달창에 문제가 있어 임시로 이 방식을 사용합니다.\n"
                 "아래 버튼을 눌러 검색해보세요!",
                 view=QuickAuctionView(),
