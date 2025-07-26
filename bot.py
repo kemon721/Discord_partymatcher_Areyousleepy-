@@ -856,8 +856,7 @@ async def call_mabinogi_api(endpoint: str, params: dict = None):
     """마비노기 API 호출 함수"""
     url = f"{config.MABINOGI_API_BASE_URL}{endpoint}"
     headers = {
-        "x-nxopen-api-key": config.MABINOGI_API_KEY,
-        "Content-Type": "application/json"
+        "x-nxopen-api-key": config.MABINOGI_API_KEY
     }
     
     try:
