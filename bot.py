@@ -204,13 +204,13 @@ class PartySetupModal(discord.ui.Modal):
                 
                 # 파티장에게 관리 방법 안내
                 await interaction.followup.send(
-                    "🎉 **파티가 성공적으로 생성되었습니다!**\n\n"
+                    "**파티가 성공적으로 생성되었습니다!**\n\n"
                     "**파티 관리 방법:**\n"
-                    "• **파티장 전용 버튼**: `✅ 파티완료`, `❌ 파티취소`\n"
+                    "• **파티장 전용 버튼**: `파티완료`, `파티취소`\n"
                     "• **슬래시 명령어**: `/파티완료`, `/파티취소`\n\n"
                     "**파티원들은 파티원 전용 버튼을 사용할 수 있습니다:**\n"
-                    "• `📥 참여하기`, `📤 나가기`\n\n"
-                    "💡 **팁**: 버튼과 슬래시 명령어 모두 동일한 기능을 제공합니다!",
+                    "• `참여하기`, `나가기`\n\n"
+                    "**팁**: 버튼과 슬래시 명령어 모두 동일한 기능을 제공합니다!",
                     ephemeral=True
                 )
                 
@@ -329,7 +329,7 @@ class PartyView(discord.ui.View):
         
         # 파티원 전용: 참여하기 버튼
         join_button = discord.ui.Button(
-            label="📥 참여하기 (파티원용)",
+            label="참여하기 (파티원용)",
             style=discord.ButtonStyle.primary,
             custom_id="join_party"
         )
@@ -338,7 +338,7 @@ class PartyView(discord.ui.View):
         
         # 파티원 전용: 나가기 버튼
         leave_button = discord.ui.Button(
-            label="📤 나가기 (파티원용)",
+            label="나가기 (파티원용)",
             style=discord.ButtonStyle.secondary,
             custom_id="leave_party"
         )
@@ -347,7 +347,7 @@ class PartyView(discord.ui.View):
         
         # 파티장 전용: 파티완료 버튼
         complete_button = discord.ui.Button(
-            label="✅ 파티완료 (파티장용)",
+            label="파티완료 (파티장용)",
             style=discord.ButtonStyle.success,
             custom_id="complete_party"
         )
@@ -356,7 +356,7 @@ class PartyView(discord.ui.View):
         
         # 파티장 전용: 파티취소 버튼
         cancel_button = discord.ui.Button(
-            label="❌ 파티취소 (파티장용)",
+            label="파티취소 (파티장용)",
             style=discord.ButtonStyle.danger,
             custom_id="cancel_party"
         )
@@ -369,7 +369,7 @@ class PartyView(discord.ui.View):
         # 파티장인 경우 제한
         if user_id == self.party_data.leader_id:
             await interaction.response.send_message(
-                "🚫 **파티장은 파티원용 버튼을 사용할 수 없습니다.**\n"
+                "**파티장은 파티원용 버튼을 사용할 수 없습니다.**\n"
                 "파티 관리를 위해 **파티장 전용 버튼**을 사용해주세요.",
                 ephemeral=True
             )
@@ -410,7 +410,7 @@ class PartyView(discord.ui.View):
         # 파티장인 경우 제한
         if user_id == self.party_data.leader_id:
             await interaction.response.send_message(
-                "🚫 **파티장은 파티원용 버튼을 사용할 수 없습니다.**\n"
+                "**파티장은 파티원용 버튼을 사용할 수 없습니다.**\n"
                 "파티 관리를 위해 **파티장 전용 버튼**을 사용해주세요.",
                 ephemeral=True
             )
@@ -442,7 +442,7 @@ class PartyView(discord.ui.View):
         # 파티장 권한 확인
         if user_id != self.party_data.leader_id:
             await interaction.response.send_message(
-                "🚫 **파티장만 사용할 수 있는 기능입니다.**\n"
+                "**파티장만 사용할 수 있는 기능입니다.**\n"
                 "파티원은 **파티원 전용 버튼**을 사용해주세요.",
                 ephemeral=True
             )
@@ -462,7 +462,7 @@ class PartyView(discord.ui.View):
         # 파티장 권한 확인
         if user_id != self.party_data.leader_id:
             await interaction.response.send_message(
-                "🚫 **파티장만 사용할 수 있는 기능입니다.**\n"
+                "**파티장만 사용할 수 있는 기능입니다.**\n"
                 "파티원은 **파티원 전용 버튼**을 사용해주세요.",
                 ephemeral=True
             )
@@ -511,12 +511,12 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
     
     if not interaction.response.is_done():
         await interaction.response.send_message(
-            "❌ 명령어 실행 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            "명령어 실행 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
             ephemeral=True
         )
     else:
         await interaction.followup.send(
-            "❌ 명령어 실행 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            "명령어 실행 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
             ephemeral=True
         )
 
@@ -706,7 +706,7 @@ async def cancel_party_by_button(interaction: discord.Interaction, party_data: P
                 if user:
                     try:
                         await user.send(
-                            f"📢 **파티 취소 알림**\n\n"
+                            f"**파티 취소 알림**\n\n"
                             f"참여하고 계신 **'{party_data.purpose}'** 파티가 파티장에 의해 취소되었습니다.\n"
                             f"출발 예정 시간: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
                         )
@@ -727,10 +727,10 @@ async def cancel_party_by_button(interaction: discord.Interaction, party_data: P
     
     try:
         # 파티장에게 취소 완료 응답 (먼저 응답)
-        cancel_message = f"✅ **'{party_data.purpose}'** 파티 모집이 취소되었습니다.\n모집창을 삭제합니다."
+        cancel_message = f"**'{party_data.purpose}'** 파티 모집이 취소되었습니다.\n모집창을 삭제합니다."
         
         if party_members:
-            cancel_message += f"\n📨 파티원 {len(party_members)}명에게 취소 알림을 전송했습니다."
+            cancel_message += f"\n파티원 {len(party_members)}명에게 취소 알림을 전송했습니다."
         
         await interaction.response.send_message(cancel_message, ephemeral=True)
         
@@ -763,7 +763,7 @@ async def disband_party_function(interaction: discord.Interaction, party_data: P
                 if user:
                     try:
                         await user.send(
-                            f"📢 **파티 취소 알림**\n\n"
+                            f"**파티 취소 알림**\n\n"
                             f"참여하고 계신 **'{party_data.purpose}'** 파티가 파티장에 의해 취소되었습니다.\n"
                             f"출발 예정 시간: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
                         )
@@ -791,10 +791,10 @@ async def disband_party_function(interaction: discord.Interaction, party_data: P
         await message.delete()
         
         # 취소 완료 응답
-        cancel_message = f"✅ **'{party_data.purpose}'** 파티 모집이 취소되었습니다.\n모집창이 삭제되었습니다."
+        cancel_message = f"**'{party_data.purpose}'** 파티 모집이 취소되었습니다.\n모집창이 삭제되었습니다."
         
         if party_members:
-            cancel_message += f"\n📨 파티원 {len(party_members)}명에게 취소 알림을 전송했습니다."
+            cancel_message += f"\n파티원 {len(party_members)}명에게 취소 알림을 전송했습니다."
         
         await interaction.response.send_message(cancel_message, ephemeral=True)
         
@@ -940,7 +940,7 @@ class AuctionSearchModal(discord.ui.Modal):
             # 검색 방식 유효성 검사
             if search_type not in ['1', '2', '3']:
                 await interaction.response.send_message(
-                    "❌ 검색 방식은 1(아이템명), 2(키워드), 3(거래내역) 중 하나를 입력해주세요.",
+                    "검색 방식은 1(아이템명), 2(키워드), 3(거래내역) 중 하나를 입력해주세요.",
                     ephemeral=True
                 )
                 return
@@ -948,7 +948,7 @@ class AuctionSearchModal(discord.ui.Modal):
             # 카테고리 유효성 검사
             if category and category not in MABINOGI_CATEGORIES:
                 await interaction.response.send_message(
-                    f"❌ 올바르지 않은 카테고리입니다.\n"
+                    f"올바르지 않은 카테고리입니다.\n"
                     f"**사용 가능한 카테고리:** {', '.join(MABINOGI_CATEGORIES[:10])}...",
                     ephemeral=True
                 )
@@ -965,7 +965,7 @@ class AuctionSearchModal(discord.ui.Modal):
                 result = await search_auction_history(item_name=search_term, category=category)
             
             if not result:
-                await interaction.followup.send("❌ API 호출에 실패했습니다. 잠시 후 다시 시도해주세요.")
+                await interaction.followup.send("API 호출에 실패했습니다. 잠시 후 다시 시도해주세요.")
                 return
             
             # 결과가 없는 경우
@@ -974,7 +974,7 @@ class AuctionSearchModal(discord.ui.Modal):
             
             if not items:
                 search_type_text = "아이템명" if search_type == '1' else "키워드" if search_type == '2' else "거래내역"
-                await interaction.followup.send(f"🔍 **{search_type_text} 검색 결과**\n검색어: `{search_term}`\n\n❌ 검색 결과가 없습니다.")
+                await interaction.followup.send(f"**{search_type_text} 검색 결과**\n검색어: `{search_term}`\n\n검색 결과가 없습니다.")
                 return
             
             # 결과 표시
@@ -987,7 +987,7 @@ class AuctionSearchModal(discord.ui.Modal):
             print(f"Auction search error: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "❌ 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                    "검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
                     ephemeral=True
                 )
 
@@ -997,13 +997,13 @@ def create_auction_embed(items: list, search_term: str, search_type: str, page: 
     
     if search_type == '3':  # 거래내역
         embed = discord.Embed(
-            title="💰 마비노기 경매장 거래내역",
+            title="마비노기 경매장 거래내역",
             description=f"**{search_type_text} 검색:** `{search_term}`",
             color=discord.Color.gold()
         )
     else:  # 현재 매물
         embed = discord.Embed(
-            title="🏪 마비노기 경매장 검색",
+            title="마비노기 경매장 검색",
             description=f"**{search_type_text} 검색:** `{search_term}`",
             color=discord.Color.blue()
         )
@@ -1016,7 +1016,7 @@ def create_auction_embed(items: list, search_term: str, search_type: str, page: 
     
     if not page_items:
         embed.add_field(
-            name="❌ 검색 결과 없음",
+            name="검색 결과 없음",
             value="해당 페이지에 표시할 아이템이 없습니다.",
             inline=False
         )
@@ -1044,9 +1044,9 @@ def create_auction_embed(items: list, search_term: str, search_type: str, page: 
         
         embed.add_field(
             name=f"{start_idx + i}. {item_name}{count_text}",
-            value=f"💰 **{price_text}** (개당)\n"
-                  f"📁 카테고리: {category}\n"
-                  f"⏰ {time_text}",
+            value=f"**{price_text}** (개당)\n"
+                  f"카테고리: {category}\n"
+                  f"{time_text}",
             inline=False
         )
     
@@ -1060,19 +1060,19 @@ class QuickAuctionView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=300)
     
-    @discord.ui.button(label="🗡️ 검 검색", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="검 검색", style=discord.ButtonStyle.primary)
     async def search_sword(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.quick_search(interaction, "검", "검")
     
-    @discord.ui.button(label="🛡️ 방패 검색", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="방패 검색", style=discord.ButtonStyle.primary)
     async def search_shield(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.quick_search(interaction, "방패", "방패")
     
-    @discord.ui.button(label="🧪 포션 검색", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="포션 검색", style=discord.ButtonStyle.primary)
     async def search_potion(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.quick_search(interaction, "포션", "포션")
     
-    @discord.ui.button(label="📜 인챈트 스크롤", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="인챈트 스크롤", style=discord.ButtonStyle.secondary)
     async def search_enchant(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.quick_search(interaction, "인챈트", "인챈트 스크롤")
     
@@ -1083,13 +1083,13 @@ class QuickAuctionView(discord.ui.View):
             result = await search_auction_items(keyword=keyword, category=category)
             
             if not result:
-                await interaction.followup.send("❌ API 호출에 실패했습니다.")
+                await interaction.followup.send("API 호출에 실패했습니다.")
                 return
             
             items = result.get("auction_item", [])
             
             if not items:
-                await interaction.followup.send(f"🔍 **{keyword} 검색 결과**\n\n❌ 검색 결과가 없습니다.")
+                await interaction.followup.send(f"**{keyword} 검색 결과**\n\n검색 결과가 없습니다.")
                 return
             
             embed = create_auction_embed(items, keyword, '2', 0)
@@ -1099,7 +1099,7 @@ class QuickAuctionView(discord.ui.View):
             
         except Exception as e:
             print(f"Quick search error: {e}")
-            await interaction.followup.send("❌ 검색 중 오류가 발생했습니다.")
+            await interaction.followup.send("검색 중 오류가 발생했습니다.")
 
 class AuctionView(discord.ui.View):
     def __init__(self, items: list, search_term: str, search_type: str, next_cursor: str = None):
@@ -1117,25 +1117,25 @@ class AuctionView(discord.ui.View):
             self.prev_button.disabled = True
             self.next_button.disabled = True
     
-    @discord.ui.button(label="◀ 이전", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="이전", style=discord.ButtonStyle.secondary)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page > 0:
             self.current_page -= 1
             embed = create_auction_embed(self.items, self.search_term, self.search_type, self.current_page)
             await interaction.response.edit_message(embed=embed, view=self)
         else:
-            await interaction.response.send_message("❌ 첫 번째 페이지입니다.", ephemeral=True)
+            await interaction.response.send_message("첫 번째 페이지입니다.", ephemeral=True)
     
-    @discord.ui.button(label="▶ 다음", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="다음", style=discord.ButtonStyle.secondary)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page < self.total_pages - 1:
             self.current_page += 1
             embed = create_auction_embed(self.items, self.search_term, self.search_type, self.current_page)
             await interaction.response.edit_message(embed=embed, view=self)
         else:
-            await interaction.response.send_message("❌ 마지막 페이지입니다.", ephemeral=True)
+            await interaction.response.send_message("마지막 페이지입니다.", ephemeral=True)
     
-    @discord.ui.button(label="🔄 새로고침", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="새로고침", style=discord.ButtonStyle.primary)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         
@@ -1158,17 +1158,17 @@ class AuctionView(discord.ui.View):
                 embed = create_auction_embed(self.items, self.search_term, self.search_type, self.current_page)
                 await interaction.followup.edit_message(interaction.message.id, embed=embed, view=self)
             else:
-                await interaction.followup.send("❌ 새로고침에 실패했습니다.", ephemeral=True)
+                await interaction.followup.send("새로고침에 실패했습니다.", ephemeral=True)
                 
         except Exception as e:
             print(f"Refresh error: {e}")
-            await interaction.followup.send("❌ 새로고침 중 오류가 발생했습니다.", ephemeral=True)
+            await interaction.followup.send("새로고침 중 오류가 발생했습니다.", ephemeral=True)
 
 @bot.tree.command(name="경매장테스트", description="경매장 기능 테스트")
 async def auction_test(interaction: discord.Interaction):
     """경매장 기능 테스트용 명령어"""
     await interaction.response.send_message(
-        "✅ **경매장 기능 테스트 성공!**\n\n"
+        "**경매장 기능 테스트 성공!**\n\n"
         "기본 상호작용이 정상 작동합니다.\n"
         "이제 `/경매장` 명령어를 시도해보세요!",
         ephemeral=True
@@ -1182,7 +1182,7 @@ async def auction_search(interaction: discord.Interaction):
     except discord.errors.NotFound:
         # Interaction이 만료된 경우 대체 응답
         await interaction.followup.send(
-            "❌ 상호작용이 만료되었습니다. 명령어를 다시 시도해주세요.",
+            "상호작용이 만료되었습니다. 명령어를 다시 시도해주세요.",
             ephemeral=True
         )
     except Exception as e:
@@ -1190,7 +1190,7 @@ async def auction_search(interaction: discord.Interaction):
         # 모달 전송 실패 시 대체 방법 제공
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "🏪 **마비노기 경매장 검색 (임시 버전)**\n\n"
+                "**마비노기 경매장 검색 (임시 버전)**\n\n"
                 "현재 모달창에 문제가 있어 임시로 이 방식을 사용합니다.\n"
                 "아래 버튼을 눌러 검색해보세요!",
                 view=QuickAuctionView(),
@@ -1198,7 +1198,7 @@ async def auction_search(interaction: discord.Interaction):
             )
         else:
             await interaction.followup.send(
-                "❌ 경매장 기능에 문제가 발생했습니다. 관리자에게 문의해주세요.",
+                "경매장 기능에 문제가 발생했습니다. 관리자에게 문의해주세요.",
                 ephemeral=True
             )
 
