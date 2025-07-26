@@ -480,10 +480,14 @@ class PartyView(discord.ui.View):
 async def on_ready():
     print('=== BOT READY EVENT TRIGGERED ===')
     print(f'Bot logged in as: {bot.user}')
+    print(f'Bot ID: {bot.user.id}')
+    print(f'Bot in {len(bot.guilds)} servers')
     
     try:
         synced = await bot.tree.sync()
         print(f'Synced {len(synced)} slash commands')
+        for cmd in synced:
+            print(f'  - /{cmd.name}: {cmd.description}')
     except Exception as e:
         print(f'Sync error: {e}')
     
@@ -494,6 +498,27 @@ async def on_ready():
         print(f'Notification checker error: {e}')
     
     print('=== BOT INITIALIZATION COMPLETE ===')
+
+@bot.event
+async def on_command_error(ctx, error):
+    """명령어 에러 핸들링"""
+    print(f"Command error: {error}")
+
+@bot.event  
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    """슬래시 명령어 에러 핸들링"""
+    print(f"App command error: {error}")
+    
+    if not interaction.response.is_done():
+        await interaction.response.send_message(
+            "❌ 명령어 실행 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            ephemeral=True
+        )
+    else:
+        await interaction.followup.send(
+            "❌ 명령어 실행 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            ephemeral=True
+        )
 
 @bot.tree.command(name="파티매칭", description="파티 모집을 시작합니다.")
 async def party_matching(interaction: discord.Interaction):
@@ -1031,6 +1056,51 @@ def create_auction_embed(items: list, search_term: str, search_type: str, page: 
     
     return embed
 
+class QuickAuctionView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+    
+    @discord.ui.button(label="🗡️ 검 검색", style=discord.ButtonStyle.primary)
+    async def search_sword(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.quick_search(interaction, "검", "검")
+    
+    @discord.ui.button(label="🛡️ 방패 검색", style=discord.ButtonStyle.primary)
+    async def search_shield(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.quick_search(interaction, "방패", "방패")
+    
+    @discord.ui.button(label="🧪 포션 검색", style=discord.ButtonStyle.primary)
+    async def search_potion(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.quick_search(interaction, "포션", "포션")
+    
+    @discord.ui.button(label="📜 인챈트 스크롤", style=discord.ButtonStyle.secondary)
+    async def search_enchant(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.quick_search(interaction, "인챈트", "인챈트 스크롤")
+    
+    async def quick_search(self, interaction: discord.Interaction, keyword: str, category: str = None):
+        await interaction.response.defer()
+        
+        try:
+            result = await search_auction_items(keyword=keyword, category=category)
+            
+            if not result:
+                await interaction.followup.send("❌ API 호출에 실패했습니다.")
+                return
+            
+            items = result.get("auction_item", [])
+            
+            if not items:
+                await interaction.followup.send(f"🔍 **{keyword} 검색 결과**\n\n❌ 검색 결과가 없습니다.")
+                return
+            
+            embed = create_auction_embed(items, keyword, '2', 0)
+            view = AuctionView(items, keyword, '2', result.get("next_cursor"))
+            
+            await interaction.followup.send(embed=embed, view=view)
+            
+        except Exception as e:
+            print(f"Quick search error: {e}")
+            await interaction.followup.send("❌ 검색 중 오류가 발생했습니다.")
+
 class AuctionView(discord.ui.View):
     def __init__(self, items: list, search_term: str, search_type: str, next_cursor: str = None):
         super().__init__(timeout=300)  # 5분 타임아웃
@@ -1094,10 +1164,43 @@ class AuctionView(discord.ui.View):
             print(f"Refresh error: {e}")
             await interaction.followup.send("❌ 새로고침 중 오류가 발생했습니다.", ephemeral=True)
 
+@bot.tree.command(name="경매장테스트", description="경매장 기능 테스트")
+async def auction_test(interaction: discord.Interaction):
+    """경매장 기능 테스트용 명령어"""
+    await interaction.response.send_message(
+        "✅ **경매장 기능 테스트 성공!**\n\n"
+        "기본 상호작용이 정상 작동합니다.\n"
+        "이제 `/경매장` 명령어를 시도해보세요!",
+        ephemeral=True
+    )
+
 @bot.tree.command(name="경매장", description="마비노기 경매장에서 아이템을 검색합니다.")
 async def auction_search(interaction: discord.Interaction):
-    modal = AuctionSearchModal()
-    await interaction.response.send_modal(modal)
+    try:
+        modal = AuctionSearchModal()
+        await interaction.response.send_modal(modal)
+    except discord.errors.NotFound:
+        # Interaction이 만료된 경우 대체 응답
+        await interaction.followup.send(
+            "❌ 상호작용이 만료되었습니다. 명령어를 다시 시도해주세요.",
+            ephemeral=True
+        )
+    except Exception as e:
+        print(f"Auction command error: {e}")
+        # 모달 전송 실패 시 대체 방법 제공
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "🏪 **마비노기 경매장 검색 (임시 버전)**\n\n"
+                "현재 모달창에 문제가 있어 임시로 이 방식을 사용합니다.\n"
+                "아래 버튼을 눌러 검색해보세요!",
+                view=QuickAuctionView(),
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                "❌ 경매장 기능에 문제가 발생했습니다. 관리자에게 문의해주세요.",
+                ephemeral=True
+            )
 
 # ============================================
 # 봇 실행
