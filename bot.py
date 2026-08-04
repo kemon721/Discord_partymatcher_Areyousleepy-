@@ -174,6 +174,13 @@ def human_members(guild: discord.Guild) -> List[int]:
     return [m.id for m in guild.members if not m.bot]
 
 
+async def ensure_account(guild_id: int, user_id: int) -> int:
+    """계정이 없으면 만들고 현재 보유량을 돌려준다."""
+    if not store.has_account(guild_id, user_id):
+        await store.grant_initial(guild_id, [user_id])
+    return store.get_balance(guild_id, user_id)
+
+
 async def grant_initial_tokens(guild: discord.Guild) -> int:
     granted = await store.grant_initial(guild.id, human_members(guild))
     if granted:
@@ -377,8 +384,7 @@ async def finish_solo_game(
     """정산하고 결과를 본인에게 보여준 뒤 채널에 게시한다."""
     guild_id, user = interaction.guild_id, interaction.user
 
-    if not store.has_account(guild_id, user.id):
-        await store.grant_initial(guild_id, [user.id])
+    await ensure_account(guild_id, user.id)
 
     reward = config.ODD_EVEN_REWARD if game == GAME_ODD_EVEN else config.NUMBER_REWARD
     delta = reward if correct else -config.SOLO_BET
@@ -499,6 +505,18 @@ class NumberModal(BaseModal, title="숫자 맞추기"):
 @bot.tree.command(name="혼자놀기", description="토큰을 걸고 혼자 하는 게임을 진행합니다.")
 @app_commands.guild_only()
 async def solo_play(interaction: discord.Interaction):
+    balance = await ensure_account(interaction.guild_id, interaction.user.id)
+    if balance < config.SOLO_BET:
+        await interaction.response.send_message(
+            embed=error_embed(
+                f"보유 토큰이 {fmt(config.SOLO_BET)} 미만이라 진행할 수 없습니다. "
+                f"현재 보유 {fmt(balance)} 토큰입니다.\n"
+                f"매일 오전 {config.DAILY_RESET_HOUR}시에 {fmt(config.DAILY_FLOOR)} 토큰으로 보정됩니다."
+            ),
+            ephemeral=True,
+        )
+        return
+
     if not await try_acquire(interaction):
         return
     await interaction.response.send_modal(GameSelectModal())
@@ -559,18 +577,15 @@ class DuoSetupModal(BaseModal, title="같이놀기"):
             await self.reject(interaction, "봇은 상대로 선택할 수 없습니다.")
             return
 
-        for member_id in (user.id, target.id):
-            if not store.has_account(guild_id, member_id):
-                await store.grant_initial(guild_id, [member_id])
-
-        my_balance = store.get_balance(guild_id, user.id)
-        their_balance = store.get_balance(guild_id, target.id)
+        my_balance = await ensure_account(guild_id, user.id)
+        their_balance = await ensure_account(guild_id, target.id)
         max_bet = min(my_balance, their_balance) // config.DUO_UNIT * config.DUO_UNIT
 
         if max_bet < config.DUO_MIN_BET:
+            short = "상대" if their_balance < my_balance else "내"
             await self.reject(
                 interaction,
-                f"걸 수 있는 토큰이 부족합니다. "
+                f"{short} 보유 토큰이 {fmt(config.DUO_MIN_BET)} 미만이라 진행할 수 없습니다. "
                 f"(내 보유 {fmt(my_balance)} / 상대 보유 {fmt(their_balance)})",
             )
             return
@@ -768,6 +783,18 @@ class DuoInviteView(discord.ui.View):
 @bot.tree.command(name="같이놀기", description="다른 인원과 토큰을 걸고 대결합니다.")
 @app_commands.guild_only()
 async def duo_play(interaction: discord.Interaction):
+    balance = await ensure_account(interaction.guild_id, interaction.user.id)
+    if balance < config.DUO_MIN_BET:
+        await interaction.response.send_message(
+            embed=error_embed(
+                f"보유 토큰이 {fmt(config.DUO_MIN_BET)} 미만이라 진행할 수 없습니다. "
+                f"현재 보유 {fmt(balance)} 토큰입니다.\n"
+                f"매일 오전 {config.DAILY_RESET_HOUR}시에 {fmt(config.DAILY_FLOOR)} 토큰으로 보정됩니다."
+            ),
+            ephemeral=True,
+        )
+        return
+
     if not await try_acquire(interaction):
         return
     await interaction.response.send_modal(DuoSetupModal())
@@ -805,8 +832,8 @@ class BalanceModal(BaseModal, title="토큰보유"):
             return
 
         is_bot = getattr(target, 'bot', False)
-        if not is_bot and not store.has_account(guild_id, target.id):
-            await store.grant_initial(guild_id, [target.id])
+        if not is_bot:
+            await ensure_account(guild_id, target.id)
 
         lines = []
         for rank, (user_id, amount) in enumerate(store.top(guild_id, 5), start=1):
