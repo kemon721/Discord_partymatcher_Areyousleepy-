@@ -1,107 +1,103 @@
-# Discord 파티 매칭 봇
+# Discord 토큰놀이 봇
 
-Discord에서 파티 모집 및 관리를 도와주는 봇입니다.
+채널 추천과 토큰을 이용한 간단한 놀이 기능을 제공하는 디스코드 봇입니다.
 
-## 기능
+## 명령어
 
-- 파티 모집 생성
-- 파티 참여/탈퇴 관리
-- 출발 시간 알림
-- 파티 완료/취소 기능
-- 파티장과 파티원 권한 구분
+| 명령어 | 설명 |
+|---|---|
+| `/채널추천` | 1~38 중 하나를 무작위로 골라 채널을 추천합니다. |
+| `/혼자놀기` | 토큰 100을 걸고 홀짝 맞추기 또는 숫자 맞추기를 진행합니다. |
+| `/같이놀기` | 다른 인원과 토큰을 걸고 숫자 대결을 합니다. |
+| `/토큰보유` | 보유량 상위 5명과 선택한 인원의 보유 토큰량을 확인합니다. |
 
-## Render를 사용한 배포 방법
+## 토큰 규칙
 
-### 1. GitHub 저장소 준비
+- 서버의 모든 인원에게 최초 1회 **1,000 토큰**을 지급합니다. 새로 들어온 인원도 입장 시 지급됩니다.
+- 매일 **오전 7시(한국 시간)** 에 보유량이 1,000 미만인 인원을 1,000으로 맞춥니다.
+  1,000 이상 보유한 인원은 지급 대상이 아니며 보유량이 그대로 유지됩니다.
+- 보유 상한은 **1,000,000 토큰** 입니다.
+- 보유량은 서버의 `data/tokens.json` 파일에서만 관리되며, 디스코드에서는 조회만 가능합니다.
 
-1. GitHub 계정에 로그인
-2. 새 저장소 생성 (New Repository)
-3. 저장소 이름 입력 (예: discord-party-bot)
-4. Public으로 설정
-5. 코드를 GitHub에 업로드
+### 놀이별 정산
 
-### 2. Discord Bot 토큰 준비
+| 게임 | 정답 | 오답 |
+|---|---|---|
+| 홀짝 맞추기 | +50 | -100 |
+| 숫자 맞추기 | +400 | -100 |
+| 같이놀기 | 이긴 쪽 +베팅액 | 진 쪽 -베팅액 |
 
-1. [Discord Developer Portal](https://discord.com/developers/applications) 접속
-2. 봇 애플리케이션 생성 및 토큰 복사
-3. 토큰을 안전한 곳에 보관 (절대 GitHub에 올리지 말 것!)
+정산 금액은 `config.py`의 `ODD_EVEN_REWARD`, `NUMBER_REWARD`, `SOLO_BET`에서 조정할 수 있습니다.
 
-### 3. Render 배포
+### 진행 제한
 
-1. [Render](https://render.com) 계정 생성
-2. 'New +' 버튼 클릭 → 'Web Service' 선택
-3. GitHub 저장소 연결
-4. 다음 설정 입력:
-   - **Runtime**: Python 3
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python bot.py`
-5. 환경변수 설정:
-   - Key: `DISCORD_TOKEN`
-   - Value: Discord에서 복사한 봇 토큰
-6. 'Create Web Service' 클릭
+- 한 서버에서 한 번에 한 명만 놀이를 진행할 수 있습니다. 이미 진행 중이면
+  `"OOO님이 놀고 있어요. 다 놀때까지 기다려주세요."` 가 표시됩니다.
+- 입력창(모달)은 **10초** 안에 제출해야 하며, 늦게 제출하면 토큰 변동 없이 종료됩니다.
+- 같이놀기 신청은 상대가 **10초** 안에 응답하지 않으면 자동으로 거절됩니다.
 
-### 4. Keep-Alive 설정
+## 데이터 보관 (중요)
 
-Render 무료 플랜은 30분 동안 요청이 없으면 서버가 잠들어집니다. 
-이를 방지하기 위해 [UptimeRobot](https://uptimerobot.com)이나 [Cronitor](https://cronitor.io) 같은 서비스를 사용하여 
-5분마다 `https://your-app-name.onrender.com/ping`에 요청을 보내도록 설정하세요.
+토큰 보유량은 `DATA_DIR` 환경변수가 가리키는 폴더의 `tokens.json`에 저장됩니다.
+기본값은 프로젝트 폴더의 `data/` 입니다.
 
-## 로컬 개발 환경 설정
+**Render의 기본 파일 시스템은 재배포·재시작 시 초기화됩니다.**
+보유량을 유지하려면 Render 서비스에 퍼시스턴트 디스크를 붙이고,
+`DATA_DIR`을 그 마운트 경로로 지정해야 합니다.
 
-1. 저장소 클론
-```bash
-git clone https://github.com/your-username/discord-party-bot.git
-cd discord-party-bot
-```
+- Render 대시보드 → 해당 서비스 → **Disks** → Add Disk
+  - Mount Path: `/var/data`
+  - Size: 1 GB
+- 환경변수에 `DATA_DIR=/var/data` 추가
 
-2. 가상환경 생성 및 활성화
+디스크를 붙이지 않으면 재배포마다 모든 인원의 보유량이 초기 상태로 돌아갑니다.
+
+## 필요한 봇 권한
+
+Discord Developer Portal → Bot → Privileged Gateway Intents 에서
+**Server Members Intent** 를 켜야 합니다. 서버 인원 목록을 읽어 최초 지급과 매일 보정을 수행합니다.
+
+## Render 배포
+
+1. GitHub 저장소를 Render Web Service에 연결
+2. Build Command: `pip install -r requirements.txt`
+3. Start Command: `python bot.py`
+4. 환경변수
+   - `DISCORD_TOKEN` : 디스코드 봇 토큰
+   - `DATA_DIR` : 퍼시스턴트 디스크 마운트 경로 (예: `/var/data`)
+
+## 로컬 실행
+
 ```bash
 python -m venv venv
-# Windows
 venv\Scripts\activate
-# Mac/Linux
-source venv/bin/activate
-```
-
-3. 의존성 설치
-```bash
 pip install -r requirements.txt
 ```
 
-4. `.env` 파일 생성
+`.env` 파일을 만들고 토큰을 넣습니다.
+
 ```
 DISCORD_TOKEN=your_discord_bot_token_here
 ```
 
-5. 봇 실행
 ```bash
 python bot.py
 ```
 
-## 사용법
+## 구성
 
-### 슬래시 명령어
+- `bot.py` : 명령어, 모달, 게임 진행
+- `storage.py` : 토큰 보유량 파일 저장소
+- `config.py` : 지급량, 배당, 시간 제한 등 설정값
 
-- `/파티매칭`: 새 파티 모집 시작
-- `/파티완료`: 파티장이 파티 활동 완료 처리
-- `/파티취소`: 파티장이 파티 모집 취소
+## 참고
 
-### 버튼 기능
+디스코드 플랫폼 제약으로 아래 동작은 구현할 수 없어 다르게 처리했습니다.
 
-- **📥 참여하기**: 파티에 참여 (파티원용)
-- **📤 나가기**: 파티에서 나가기 (파티원용)
-- **✅ 파티완료**: 파티 활동 완료 (파티장용)
-- **❌ 파티취소**: 파티 모집 취소 (파티장용)
-
-## 보안 주의사항
-
-- Discord 봇 토큰을 절대 GitHub나 공개 장소에 노출하지 마세요
-- 환경변수를 통해서만 토큰을 관리하세요
-- `.env` 파일은 `.gitignore`에 포함되어 Git에 업로드되지 않습니다
-
-## 기술 스택
-
-- Python 3.8+
-- discord.py
-- Flask (Keep-Alive용)
-- python-dotenv 
+- 모달 제출에 대한 응답으로 모달을 다시 열 수 없어, 혼자놀기는 게임 선택 후
+  `게임 시작` 버튼을 한 번 거쳐 입력창이 열립니다.
+- 봇이 열려 있는 모달을 닫을 수 없어, 10초 제한은 제출 시각으로 판정합니다.
+  10초를 넘겨 제출하면 토큰 변동 없이 종료됩니다.
+- 모달에는 입력 중 검증이나 버튼 비활성화 기능이 없어, 베팅 금액이 범위를 벗어나면
+  제출 후 안내와 함께 `다시 입력` 버튼을 제공합니다.
+- 결과는 모달이 아니라 임베드 메시지로 표시됩니다.

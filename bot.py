@@ -1,17 +1,23 @@
-import discord
-from discord.ext import commands, tasks
-from discord import app_commands
-import asyncio
-from datetime import datetime, timedelta
-import json
-import config
 import os
+import random
 import threading
+import time
+from datetime import time as dt_time
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import aiohttp
-import urllib.parse
+from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
-# 간단한 HTTP 서버 (Render 포트 감지용)
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+
+import config
+from storage import store
+
+
+# ============================================
+# HTTP 서버 (Render 포트 감지용)
+# ============================================
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -22,13 +28,12 @@ class SimpleHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"Discord Bot 상태: {status}".encode('utf-8'))
         else:
             self.wfile.write("Discord Bot이 실행중입니다!".encode('utf-8'))
-    
+
     def log_message(self, format, *args):
-        # HTTP 서버 로그 출력 비활성화
         return
 
+
 def start_http_server():
-    """HTTP 서버 시작 (Render 포트 감지용)"""
     try:
         port = int(os.environ.get('PORT', 10000))
         server = HTTPServer(('0.0.0.0', port), SimpleHandler)
@@ -37,452 +42,781 @@ def start_http_server():
     except Exception as e:
         print(f"HTTP server error: {e}")
 
-# 인텐트 설정 - 모든 인텐트 활성화
-intents = discord.Intents.all()
 
-# 봇 인스턴스 생성
+intents = discord.Intents.default()
+intents.members = True
+
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# 파티 데이터 저장용 딕셔너리
-parties = {}
+KST = ZoneInfo(config.TIMEZONE)
 
-# 사용자별 파티 참여 상태 추적 (user_id: party_message_id)
-user_party_status = {}
+# 임베드 색상
+COLOR_NEUTRAL = discord.Color.from_str('#5865F2')
+COLOR_WIN = discord.Color.from_str('#3BA55D')
+COLOR_LOSE = discord.Color.from_str('#4E5058')
+COLOR_ERROR = discord.Color.from_str('#ED4245')
 
-class PartyData:
-    def __init__(self, leader_id, purpose, departure_time, max_members, spec_cuts, notes):
-        self.leader_id = leader_id
-        self.purpose = purpose
-        self.departure_time = departure_time
-        self.max_members = max_members
-        self.spec_cuts = spec_cuts
-        self.notes = notes
-        self.members = [leader_id]  # 파티장이 자동으로 포함
-        self.channel_id = None
-        self.message_id = None
-        self.is_full = False
-        self.is_completed = False
-        self.notification_sent = False
 
-class PartySetupModal(discord.ui.Modal):
+# ============================================
+# 놀이 잠금 (서버당 1명)
+# ============================================
+class PlayLock:
+    """한 서버에서 한 번에 한 명만 놀이를 진행하도록 제한한다."""
+
     def __init__(self):
-        super().__init__(title="파티 설정")
-        
-        # 파티 목적
-        self.purpose = discord.ui.TextInput(
-            label="파티 목적",
-            placeholder="파티의 목적을 입력해주세요 (예: 던전 클리어, 레이드 등)",
-            required=True,
-            max_length=100
-        )
-        
-        # 출발 일시 (YYMMDD HH:MM 형식)
-        self.departure_time = discord.ui.TextInput(
-            label="출발 일시",
-            placeholder="YYMMDD HH:MM (예: 250715 20:50)",
-            required=True,
-            max_length=14
-        )
-        
-        # 인원수
-        self.max_members = discord.ui.TextInput(
-            label="총 인원수",
-            placeholder=f"2~{config.MAX_PARTY_SIZE}명 사이로 입력해주세요",
-            required=True,
-            max_length=2
-        )
-        
-        # 스펙컷
-        self.spec_cuts = discord.ui.TextInput(
-            label="스펙컷",
-            placeholder="필요한 스펙을 입력해주세요 (줄바꿈으로 구분)",
-            required=False,
-            style=discord.TextStyle.paragraph,
-            max_length=500
-        )
-        
-        # 비고
-        self.notes = discord.ui.TextInput(
-            label="비고",
-            placeholder="추가 사항이 있으면 입력해주세요",
-            required=False,
-            style=discord.TextStyle.paragraph,
-            max_length=500
-        )
-        
-        self.add_item(self.purpose)
-        self.add_item(self.departure_time)
-        self.add_item(self.max_members)
-        self.add_item(self.spec_cuts)
-        self.add_item(self.notes)
-    
-    async def on_submit(self, interaction: discord.Interaction):
+        # guild_id -> (user_id, 만료 시각)
+        self._holders: Dict[int, Tuple[int, float]] = {}
+
+    def holder(self, guild_id: int) -> Optional[int]:
+        entry = self._holders.get(guild_id)
+        if entry is None:
+            return None
+        user_id, expires_at = entry
+        if time.monotonic() >= expires_at:
+            del self._holders[guild_id]
+            return None
+        return user_id
+
+    def acquire(self, guild_id: int, user_id: int) -> Optional[int]:
+        """잠금을 얻으면 None, 이미 사용 중이면 사용 중인 사용자 ID를 돌려준다."""
+        current = self.holder(guild_id)
+        if current is not None and current != user_id:
+            return current
+        self._holders[guild_id] = (user_id, time.monotonic() + config.PLAY_LOCK_TIMEOUT)
+        return None
+
+    def refresh(self, guild_id: int, user_id: int) -> None:
+        if self.holder(guild_id) == user_id:
+            self._holders[guild_id] = (user_id, time.monotonic() + config.PLAY_LOCK_TIMEOUT)
+
+    def release(self, guild_id: int, user_id: int) -> None:
+        if self._holders.get(guild_id, (None, 0.0))[0] == user_id:
+            self._holders.pop(guild_id, None)
+
+
+play_lock = PlayLock()
+
+
+async def try_acquire(interaction: discord.Interaction) -> bool:
+    """잠금을 시도하고, 실패하면 안내 메시지를 보낸 뒤 False를 돌려준다."""
+    busy_user_id = play_lock.acquire(interaction.guild_id, interaction.user.id)
+    if busy_user_id is None:
+        return True
+
+    member = interaction.guild.get_member(busy_user_id)
+    name = member.display_name if member else f"<@{busy_user_id}>"
+    await interaction.response.send_message(
+        f"{name}님이 놀고 있어요. 다 놀때까지 기다려주세요.",
+        ephemeral=True,
+    )
+    return False
+
+
+# ============================================
+# 공통 도구
+# ============================================
+def fmt(amount: int) -> str:
+    return f"{amount:,}"
+
+
+def roll() -> int:
+    return random.randint(config.DICE_MIN, config.DICE_MAX)
+
+
+def error_embed(message: str) -> discord.Embed:
+    return discord.Embed(description=message, color=COLOR_ERROR)
+
+
+def elapsed_over_limit(started_at: float) -> bool:
+    return (time.monotonic() - started_at) > config.MODAL_TIME_LIMIT
+
+
+async def reply_timeout(interaction: discord.Interaction) -> None:
+    await interaction.response.send_message(
+        embed=error_embed(
+            f"입력 제한 시간 {config.MODAL_TIME_LIMIT}초를 넘겨 종료되었습니다. 토큰 변동은 없습니다."
+        ),
+        ephemeral=True,
+    )
+
+
+class BaseModal(discord.ui.Modal):
+    """처리 중 오류가 나면 잠금을 풀고 사용자에게 알린다."""
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        print(f"Modal error ({type(self).__name__}): {error}")
+        if interaction.guild_id:
+            play_lock.release(interaction.guild_id, interaction.user.id)
+
+        message = "처리 중 오류가 발생했습니다. 토큰 변동은 없습니다."
         try:
-            # 사용자가 이미 다른 파티에 참여중인지 확인
-            if interaction.user.id in user_party_status:
-                await interaction.response.send_message(
-                    "이미 다른 파티에 참여중입니다. 한 번에 하나의 파티에만 참여할 수 있습니다.",
-                    ephemeral=True
-                )
-                return
-            
-            # 출발 시간 파싱 (YYMMDD HH:MM 형식)
-            datetime_input = self.departure_time.value.strip()
-            date_time_parts = datetime_input.split(' ')
-            if len(date_time_parts) != 2:
-                raise ValueError("날짜와 시간을 공백으로 구분해주세요")
-            
-            date_part = date_time_parts[0]  # YYMMDD
-            time_part = date_time_parts[1]  # HH:MM
-            
-            # 날짜 파싱 (YYMMDD)
-            if len(date_part) != 6:
-                raise ValueError("날짜는 YYMMDD 형식이어야 합니다")
-            
-            year = int(date_part[:2]) + 2000  # YY -> 20YY
-            month = int(date_part[2:4])
-            day = int(date_part[4:6])
-            
-            # 시간 파싱 (HH:MM)
-            hour, minute = time_part.split(':')
-            
-            departure_dt = datetime(
-                year,
-                month,
-                day,
-                int(hour),
-                int(minute)
-            )
-            
-            # 과거 시간 체크
-            if departure_dt < datetime.now():
-                await interaction.response.send_message(
-                    "출발 시간은 현재 시간보다 미래여야 합니다.",
-                    ephemeral=True
-                )
-                return
-            
-            # 인원수 검증
-            max_members = int(self.max_members.value)
-            if max_members < config.MIN_PARTY_SIZE or max_members > config.MAX_PARTY_SIZE:
-                await interaction.response.send_message(
-                    f"인원수는 {config.MIN_PARTY_SIZE}~{config.MAX_PARTY_SIZE}명 사이여야 합니다.",
-                    ephemeral=True
-                )
-                return
-            
-            # 스펙컷 리스트로 변환
-            spec_cuts_list = [line.strip() for line in self.spec_cuts.value.split('\n') if line.strip()] if self.spec_cuts.value else []
-            
-            # 파티 데이터 생성
-            party_data = PartyData(
-                leader_id=interaction.user.id,
-                purpose=self.purpose.value,
-                departure_time=departure_dt,
-                max_members=max_members,
-                spec_cuts=spec_cuts_list,
-                notes=self.notes.value
-            )
-            
-            # 파티 임베드 생성 및 전송
-            embed = create_party_embed(party_data, interaction.user)
-            view = PartyView(party_data)
-            
-            await interaction.response.send_message(embed=embed, view=view)
-            
-            # 메시지 정보 저장
-            try:
-                message = await interaction.original_response()
-                party_data.channel_id = interaction.channel.id
-                party_data.message_id = message.id
-                
-                # 파티 데이터 저장
-                parties[message.id] = party_data
-                
-                # 파티장 상태 업데이트
-                user_party_status[interaction.user.id] = message.id
-                
-                # 파티장에게 관리 방법 안내
-                await interaction.followup.send(
-                    "🎉 **파티가 성공적으로 생성되었습니다!**\n\n"
-                    "**파티 관리 방법:**\n"
-                    "• **파티장 전용 버튼**: `✅ 파티완료`, `❌ 파티취소`\n"
-                    "• **슬래시 명령어**: `/파티완료`, `/파티취소`\n\n"
-                    "**파티원들은 파티원 전용 버튼을 사용할 수 있습니다:**\n"
-                    "• `📥 참여하기`, `📤 나가기`\n\n"
-                    "💡 **팁**: 버튼과 슬래시 명령어 모두 동일한 기능을 제공합니다!",
-                    ephemeral=True
-                )
-                
-            except Exception as e:
-                print(f"Party setup post-processing error: {e}")
-                # 이미 응답은 보냈으므로 사용자에게는 정상적으로 보임
-                
-        except ValueError as e:
-            # interaction이 아직 응답되지 않은 경우에만 응답
             if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "입력한 날짜/시간 형식이 올바르지 않습니다. YYMMDD HH:MM 형식으로 입력해주세요. (예: 250715 20:50)",
-                    ephemeral=True
-                )
-        except Exception as e:
-            print(f"Party creation error: {e}")
-            # interaction이 아직 응답되지 않은 경우에만 응답
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-                    ephemeral=True
-                )
-
-
-
-
-def create_party_embed(party_data: PartyData, leader: discord.User):
-    if party_data.is_completed:
-        embed = discord.Embed(
-            title="파티 모집 완료",
-            description=f"**목적:** {party_data.purpose}",
-            color=discord.Color.green()
-        )
-    elif party_data.is_full:
-        embed = discord.Embed(
-            title="파티 모집 마감",
-            description=f"**목적:** {party_data.purpose}",
-            color=discord.Color.orange()
-        )
-    else:
-        embed = discord.Embed(
-            title="파티 모집",
-            description=f"**목적:** {party_data.purpose}",
-            color=discord.Color.blue()
-        )
-    
-    # 파티장 정보
-    embed.add_field(
-        name="파티장",
-        value=leader.display_name if leader else f"<@{party_data.leader_id}>",
-        inline=True
-    )
-    
-    # 출발 시간
-    embed.add_field(
-        name="출발 시간",
-        value=party_data.departure_time.strftime("%Y년 %m월 %d일 %H:%M"),
-        inline=True
-    )
-    
-    # 인원 현황
-    current_members = len(party_data.members)
-    embed.add_field(
-        name="인원 현황",
-        value=f"{current_members}/{party_data.max_members}명",
-        inline=True
-    )
-    
-    # 스펙컷
-    if party_data.spec_cuts:
-        spec_text = "\n".join([f"• {spec}" for spec in party_data.spec_cuts])
-        embed.add_field(
-            name="스펙컷",
-            value=spec_text,
-            inline=False
-        )
-    
-    # 비고
-    if party_data.notes:
-        embed.add_field(
-            name="비고",
-            value=party_data.notes,
-            inline=False
-        )
-    
-    # 참여 멤버 목록
-    if party_data.members:
-        member_list = []
-        for i, member_id in enumerate(party_data.members, 1):
-            user = bot.get_user(member_id)
-            role = "파티장" if member_id == party_data.leader_id else "멤버"
-            
-            if user:
-                member_list.append(f"{i}. {user.display_name} ({role})")
+                await interaction.response.send_message(embed=error_embed(message), ephemeral=True)
             else:
-                member_list.append(f"{i}. <@{member_id}> ({role})")
-        
+                await interaction.followup.send(embed=error_embed(message), ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+
+# ============================================
+# 1. 채널 추천
+# ============================================
+@bot.tree.command(name="채널추천", description="접속할 채널 번호를 하나 추천합니다.")
+async def recommend_channel(interaction: discord.Interaction):
+    number = random.randint(config.CHANNEL_MIN, config.CHANNEL_MAX)
+    await interaction.response.send_message(f"{number}채널로 가세요!!")
+
+
+# ============================================
+# 2. 토큰 지급
+# ============================================
+def human_members(guild: discord.Guild) -> List[int]:
+    return [m.id for m in guild.members if not m.bot]
+
+
+async def grant_initial_tokens(guild: discord.Guild) -> int:
+    granted = await store.grant_initial(guild.id, human_members(guild))
+    if granted:
+        print(f"[tokens] {guild.name}: {granted}명에게 최초 {config.INITIAL_TOKENS} 토큰을 지급했습니다.")
+    return granted
+
+
+@tasks.loop(time=dt_time(hour=config.DAILY_RESET_HOUR, tzinfo=KST))
+async def daily_topup():
+    """매일 지정 시각에 보유량이 기준선 미만인 인원을 기준선으로 맞춘다."""
+    for guild in bot.guilds:
+        try:
+            members = human_members(guild)
+            await store.grant_initial(guild.id, members)
+            changed = await store.daily_topup(guild.id, members)
+            print(f"[tokens] {guild.name}: {changed}명의 보유량을 {config.DAILY_FLOOR}으로 맞췄습니다.")
+        except Exception as e:
+            print(f"Daily topup error ({guild.id}): {e}")
+
+
+@daily_topup.before_loop
+async def before_daily_topup():
+    await bot.wait_until_ready()
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    if member.bot:
+        return
+    try:
+        await store.grant_initial(member.guild.id, [member.id])
+    except Exception as e:
+        print(f"Member join grant error: {e}")
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    try:
+        await grant_initial_tokens(guild)
+    except Exception as e:
+        print(f"Guild join grant error: {e}")
+
+
+# ============================================
+# 3. 혼자놀기
+# ============================================
+GAME_ODD_EVEN = '1'
+GAME_NUMBER = '2'
+GAME_NAMES = {GAME_ODD_EVEN: "홀짝 맞추기", GAME_NUMBER: "숫자 맞추기"}
+
+
+class GameSelectModal(BaseModal, title="혼자놀기"):
+    """진행할 게임을 고르는 첫 번째 단계."""
+
+    def __init__(self):
+        super().__init__()
+        self.started_at = time.monotonic()
+
+        self.add_item(discord.ui.TextDisplay(
+            f"**1** 홀짝 맞추기 — 1~{config.DICE_MAX} 중 뽑힌 숫자가 홀수인지 짝수인지 맞춥니다. "
+            f"정답 시 {fmt(config.ODD_EVEN_REWARD)} 토큰 지급.\n"
+            f"**2** 숫자 맞추기 — 1~{config.DICE_MAX} 중 뽑힌 숫자를 맞춥니다. "
+            f"정답 시 {fmt(config.NUMBER_REWARD)} 토큰 지급.\n\n"
+            f"오답 시 {fmt(config.SOLO_BET)} 토큰이 회수됩니다.\n"
+            f"## {config.MODAL_TIME_LIMIT}초 안에 입력을 완료하지 않으면 종료됩니다."
+        ))
+
+        self.choice = discord.ui.TextInput(
+            placeholder="1 또는 2",
+            required=True,
+            min_length=1,
+            max_length=1,
+        )
+        self.add_item(discord.ui.Label(
+            text="게임 선택",
+            description="1 = 홀짝 맞추기 / 2 = 숫자 맞추기",
+            component=self.choice,
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild_id, user_id = interaction.guild_id, interaction.user.id
+
+        if elapsed_over_limit(self.started_at):
+            play_lock.release(guild_id, user_id)
+            await reply_timeout(interaction)
+            return
+
+        value = self.choice.value.strip()
+        if value not in GAME_NAMES:
+            play_lock.release(guild_id, user_id)
+            await interaction.response.send_message(
+                embed=error_embed("1 또는 2만 입력할 수 있습니다. 토큰 변동은 없습니다."),
+                ephemeral=True,
+            )
+            return
+
+        play_lock.refresh(guild_id, user_id)
+        view = SoloStartView(user_id, value)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title=GAME_NAMES[value],
+                description=(
+                    "아래 버튼을 누르면 입력창이 열립니다.\n"
+                    f"입력창이 열린 뒤 {config.MODAL_TIME_LIMIT}초 안에 답을 제출해야 합니다."
+                ),
+                color=COLOR_NEUTRAL,
+            ),
+            view=view,
+            ephemeral=True,
+        )
+        view.interaction = interaction
+
+
+class SoloStartView(discord.ui.View):
+    """모달 제출에 대한 응답으로는 모달을 띄울 수 없어 중간에 두는 버튼."""
+
+    def __init__(self, user_id: int, game: str):
+        super().__init__(timeout=config.BUTTON_TIME_LIMIT)
+        self.user_id = user_id
+        self.game = game
+        self.interaction: Optional[discord.Interaction] = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("본인만 사용할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="게임 시작", style=discord.ButtonStyle.primary)
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        play_lock.refresh(interaction.guild_id, self.user_id)
+        modal = OddEvenModal() if self.game == GAME_ODD_EVEN else NumberModal()
+        await interaction.response.send_modal(modal)
+        self.stop()
+        await self.clear_prompt()
+
+    async def clear_prompt(self) -> None:
+        """버튼이 달린 안내 메시지에서 버튼을 없앤다."""
+        if self.interaction is None:
+            return
+        try:
+            await self.interaction.edit_original_response(
+                embed=discord.Embed(description="입력창이 열렸습니다.", color=COLOR_NEUTRAL),
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self):
+        if self.interaction is None:
+            return
+        play_lock.release(self.interaction.guild_id, self.user_id)
+        try:
+            await self.interaction.edit_original_response(
+                embed=error_embed("시간이 지나 종료되었습니다. 토큰 변동은 없습니다."),
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+
+async def finish_solo_game(
+    interaction: discord.Interaction,
+    game: str,
+    answer_text: str,
+    correct: bool,
+    number: int,
+) -> None:
+    """정산하고 결과를 본인에게 보여준 뒤 채널에 게시한다."""
+    guild_id, user = interaction.guild_id, interaction.user
+
+    if not store.has_account(guild_id, user.id):
+        await store.grant_initial(guild_id, [user.id])
+
+    reward = config.ODD_EVEN_REWARD if game == GAME_ODD_EVEN else config.NUMBER_REWARD
+    delta = reward if correct else -config.SOLO_BET
+    balance = await store.adjust(guild_id, user.id, delta)
+
+    play_lock.release(guild_id, user.id)
+
+    verdict = "정답!" if correct else "오답!"
+    result_embed = discord.Embed(
+        title=GAME_NAMES[game],
+        description=f"# {number}\n# {verdict}",
+        color=COLOR_WIN if correct else COLOR_LOSE,
+    )
+    result_embed.add_field(name="입력", value=answer_text, inline=True)
+    result_embed.add_field(
+        name="토큰",
+        value=f"{'+' if delta > 0 else ''}{fmt(delta)}",
+        inline=True,
+    )
+    result_embed.add_field(name="보유 토큰", value=fmt(balance), inline=True)
+
+    await interaction.response.send_message(embed=result_embed, ephemeral=True)
+
+    public_embed = discord.Embed(
+        description=(
+            f"{user.display_name}님이 {GAME_NAMES[game]}을(를) 진행했습니다.\n"
+            f"뽑힌 숫자 **{number}** / 입력 **{answer_text}**\n"
+            f"결과 **{verdict}**\n"
+            f"남은 토큰 **{fmt(balance)}**"
+        ),
+        color=COLOR_WIN if correct else COLOR_LOSE,
+    )
+    try:
+        await interaction.followup.send(embed=public_embed)
+    except discord.HTTPException as e:
+        print(f"Solo result post error: {e}")
+
+
+class OddEvenModal(BaseModal, title="홀짝 맞추기"):
+    def __init__(self):
+        super().__init__()
+        self.started_at = time.monotonic()
+
+        self.add_item(discord.ui.TextDisplay(
+            f"# 홀짝 맞추기\n"
+            f"1~{config.DICE_MAX} 중 하나가 무작위로 뽑힙니다. 그 숫자가 홀수인지 짝수인지 맞추세요.\n"
+            f"정답 시 {fmt(config.ODD_EVEN_REWARD)} 토큰 지급, 오답 시 {fmt(config.SOLO_BET)} 토큰 회수.\n"
+            f"## {config.MODAL_TIME_LIMIT}초 안에 제출하지 않으면 종료됩니다."
+        ))
+
+        self.answer = discord.ui.TextInput(
+            placeholder="짝 또는 홀",
+            required=True,
+            min_length=1,
+            max_length=1,
+        )
+        self.add_item(discord.ui.Label(
+            text="정답 입력",
+            description="'짝' 또는 '홀' 한 글자만 입력합니다. 그 외 입력은 오답으로 처리됩니다.",
+            component=self.answer,
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if elapsed_over_limit(self.started_at):
+            play_lock.release(interaction.guild_id, interaction.user.id)
+            await reply_timeout(interaction)
+            return
+
+        entered = self.answer.value.strip()
+        number = roll()
+        actual = "짝" if number % 2 == 0 else "홀"
+        correct = entered == actual
+
+        await finish_solo_game(interaction, GAME_ODD_EVEN, entered, correct, number)
+
+
+class NumberModal(BaseModal, title="숫자 맞추기"):
+    def __init__(self):
+        super().__init__()
+        self.started_at = time.monotonic()
+
+        self.add_item(discord.ui.TextDisplay(
+            f"# 숫자 맞추기\n"
+            f"1~{config.DICE_MAX} 중 하나가 무작위로 뽑힙니다. 그 숫자를 맞추세요.\n"
+            f"정답 시 {fmt(config.NUMBER_REWARD)} 토큰 지급, 오답 시 {fmt(config.SOLO_BET)} 토큰 회수.\n"
+            f"## {config.MODAL_TIME_LIMIT}초 안에 제출하지 않으면 종료됩니다."
+        ))
+
+        self.answer = discord.ui.TextInput(
+            placeholder=f"{config.DICE_MIN} ~ {config.DICE_MAX}",
+            required=True,
+            min_length=1,
+            max_length=2,
+        )
+        self.add_item(discord.ui.Label(
+            text="정답 입력",
+            description=f"{config.DICE_MIN}부터 {config.DICE_MAX} 사이의 숫자. 그 외 입력은 오답으로 처리됩니다.",
+            component=self.answer,
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if elapsed_over_limit(self.started_at):
+            play_lock.release(interaction.guild_id, interaction.user.id)
+            await reply_timeout(interaction)
+            return
+
+        entered = self.answer.value.strip()
+        number = roll()
+        try:
+            guess = int(entered)
+        except ValueError:
+            guess = None
+        correct = guess == number
+
+        await finish_solo_game(interaction, GAME_NUMBER, entered, correct, number)
+
+
+@bot.tree.command(name="혼자놀기", description="토큰을 걸고 혼자 하는 게임을 진행합니다.")
+@app_commands.guild_only()
+async def solo_play(interaction: discord.Interaction):
+    if not await try_acquire(interaction):
+        return
+    await interaction.response.send_modal(GameSelectModal())
+
+
+# ============================================
+# 4. 같이놀기
+# ============================================
+class DuoSetupModal(BaseModal, title="같이놀기"):
+    def __init__(self):
+        super().__init__()
+        self.started_at = time.monotonic()
+
+        self.add_item(discord.ui.TextDisplay(
+            f"상대와 각각 1~{config.DICE_MAX} 중 하나를 뽑아 더 높은 쪽이 이깁니다.\n"
+            f"이긴 쪽은 건 토큰만큼 얻고, 진 쪽은 그만큼 잃습니다.\n"
+            f"베팅은 {fmt(config.DUO_UNIT)} 단위이며, 두 사람 중 보유량이 적은 쪽까지만 걸 수 있습니다.\n"
+            f"## {config.MODAL_TIME_LIMIT}초 안에 제출하지 않으면 종료됩니다."
+        ))
+
+        self.opponent = discord.ui.UserSelect(
+            placeholder="같이 놀 상대를 선택하세요",
+            min_values=1,
+            max_values=1,
+            required=True,
+        )
+        self.add_item(discord.ui.Label(text="상대", component=self.opponent))
+
+        self.bet = discord.ui.TextInput(
+            placeholder="예: 5 → 500 토큰",
+            required=True,
+            max_length=4,
+        )
+        self.add_item(discord.ui.Label(
+            text="베팅 토큰",
+            description="[입력값]00 토큰 — 1을 입력하면 100 토큰, 11을 입력하면 1,100 토큰입니다.",
+            component=self.bet,
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild_id, user = interaction.guild_id, interaction.user
+
+        if elapsed_over_limit(self.started_at):
+            play_lock.release(guild_id, user.id)
+            await reply_timeout(interaction)
+            return
+
+        selected = self.opponent.values
+        target = selected[0] if selected else None
+
+        if target is None:
+            await self.reject(interaction, "상대를 선택해주세요.")
+            return
+        if target.id == user.id:
+            await self.reject(interaction, "자기 자신은 상대로 선택할 수 없습니다.")
+            return
+        if getattr(target, 'bot', False):
+            await self.reject(interaction, "봇은 상대로 선택할 수 없습니다.")
+            return
+
+        for member_id in (user.id, target.id):
+            if not store.has_account(guild_id, member_id):
+                await store.grant_initial(guild_id, [member_id])
+
+        my_balance = store.get_balance(guild_id, user.id)
+        their_balance = store.get_balance(guild_id, target.id)
+        max_bet = min(my_balance, their_balance) // config.DUO_UNIT * config.DUO_UNIT
+
+        if max_bet < config.DUO_MIN_BET:
+            await self.reject(
+                interaction,
+                f"걸 수 있는 토큰이 부족합니다. "
+                f"(내 보유 {fmt(my_balance)} / 상대 보유 {fmt(their_balance)})",
+            )
+            return
+
+        raw = self.bet.value.strip()
+        if not raw.isdigit():
+            await self.reject(interaction, "입력한 토큰 양을 확인해주세요. 숫자만 입력할 수 있습니다.")
+            return
+
+        amount = int(raw) * config.DUO_UNIT
+        if amount < config.DUO_MIN_BET or amount > max_bet:
+            await self.reject(
+                interaction,
+                f"입력한 토큰 양을 확인해주세요. "
+                f"{fmt(config.DUO_MIN_BET)} ~ {fmt(max_bet)} 토큰까지 가능합니다. "
+                f"(입력값 {raw} → {fmt(amount)} 토큰)",
+            )
+            return
+
+        play_lock.refresh(guild_id, user.id)
+
+        view = DuoInviteView(challenger=user, target=target, amount=amount)
+        embed = discord.Embed(
+            title="같이놀기 신청",
+            description=(
+                f"{user.mention}님이 {target.mention}님에게 대결을 신청했습니다.\n"
+                f"걸린 토큰 **{fmt(amount)}**\n\n"
+                f"{target.display_name}님만 응답할 수 있습니다. "
+                f"{config.INVITE_TIME_LIMIT}초 안에 응답하지 않으면 자동으로 거절됩니다."
+            ),
+            color=COLOR_NEUTRAL,
+        )
+        await interaction.response.send_message(embed=embed, view=view)
+        view.message = await interaction.original_response()
+
+    async def reject(self, interaction: discord.Interaction, message: str) -> None:
+        """검증에 실패했을 때 사유와 재입력 버튼을 보여준다."""
+        view = DuoRetryView(interaction.user.id)
+        await interaction.response.send_message(embed=error_embed(message), view=view, ephemeral=True)
+        view.interaction = interaction
+        play_lock.refresh(interaction.guild_id, interaction.user.id)
+
+
+class DuoRetryView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=config.BUTTON_TIME_LIMIT)
+        self.user_id = user_id
+        self.interaction: Optional[discord.Interaction] = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("본인만 사용할 수 있습니다.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="다시 입력", style=discord.ButtonStyle.secondary)
+    async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
+        play_lock.refresh(interaction.guild_id, self.user_id)
+        await interaction.response.send_modal(DuoSetupModal())
+        self.stop()
+        if self.interaction is None:
+            return
+        try:
+            await self.interaction.edit_original_response(
+                embed=discord.Embed(description="입력창이 열렸습니다.", color=COLOR_NEUTRAL),
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self):
+        if self.interaction is None:
+            return
+        play_lock.release(self.interaction.guild_id, self.user_id)
+        try:
+            await self.interaction.edit_original_response(
+                embed=error_embed("시간이 지나 종료되었습니다. 토큰 변동은 없습니다."),
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+
+class DuoInviteView(discord.ui.View):
+    def __init__(self, challenger: discord.Member, target: discord.Member, amount: int):
+        super().__init__(timeout=config.INVITE_TIME_LIMIT)
+        self.challenger = challenger
+        self.target = target
+        self.amount = amount
+        self.message: Optional[discord.Message] = None
+        self.resolved = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.target.id:
+            await interaction.response.send_message(
+                "이 대결의 상대만 응답할 수 있습니다.", ephemeral=True
+            )
+            return False
+        return True
+
+    def release(self, guild_id: int) -> None:
+        play_lock.release(guild_id, self.challenger.id)
+
+    @discord.ui.button(label="수락", style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.resolved = True
+        self.stop()
+
+        guild_id = interaction.guild_id
+        my_balance = store.get_balance(guild_id, self.challenger.id)
+        their_balance = store.get_balance(guild_id, self.target.id)
+
+        if min(my_balance, their_balance) < self.amount:
+            self.release(guild_id)
+            await interaction.response.edit_message(
+                embed=error_embed("보유 토큰이 부족해져 대결이 취소되었습니다. 토큰 변동은 없습니다."),
+                view=None,
+            )
+            return
+
+        # 무승부가 나오지 않도록 서로 다른 숫자가 나올 때까지 다시 뽑는다.
+        my_roll, their_roll = roll(), roll()
+        while my_roll == their_roll:
+            my_roll, their_roll = roll(), roll()
+
+        if my_roll > their_roll:
+            winner, loser = self.challenger, self.target
+        else:
+            winner, loser = self.target, self.challenger
+
+        winner_balance, loser_balance = await store.transfer(
+            guild_id, winner.id, loser.id, self.amount
+        )
+        self.release(guild_id)
+
+        balances = {winner.id: winner_balance, loser.id: loser_balance}
+        embed = discord.Embed(
+            title="같이놀기 결과",
+            description=(
+                f"# {self.challenger.display_name} : {my_roll}\n"
+                f"# {self.target.display_name} : {their_roll}\n"
+                f"# {winner.display_name} 승리!"
+            ),
+            color=COLOR_WIN,
+        )
+        embed.add_field(name="걸린 토큰", value=fmt(self.amount), inline=True)
         embed.add_field(
-            name="참여 멤버",
-            value="\n".join(member_list),
-            inline=False
+            name=f"{self.challenger.display_name} 보유 토큰",
+            value=fmt(balances[self.challenger.id]),
+            inline=True,
         )
-    
-    return embed
+        embed.add_field(
+            name=f"{self.target.display_name} 보유 토큰",
+            value=fmt(balances[self.target.id]),
+            inline=True,
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
 
-class PartyView(discord.ui.View):
-    def __init__(self, party_data: PartyData):
-        super().__init__(timeout=None)
-        self.party_data = party_data
-        self.setup_buttons()
-    
-    def setup_buttons(self):
-        # 파티가 완료된 경우 버튼 없음
-        if self.party_data.is_completed:
-            return
-        
-        # 파티원 전용: 참여하기 버튼
-        join_button = discord.ui.Button(
-            label="📥 참여하기 (파티원용)",
-            style=discord.ButtonStyle.primary,
-            custom_id="join_party"
+    @discord.ui.button(label="거절", style=discord.ButtonStyle.secondary)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.resolved = True
+        self.stop()
+        self.release(interaction.guild_id)
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="같이놀기 종료",
+                description=f"{self.target.display_name}님이 거절했습니다. 토큰 변동은 없습니다.",
+                color=COLOR_LOSE,
+            ),
+            view=None,
         )
-        join_button.callback = self.join_party
-        self.add_item(join_button)
-        
-        # 파티원 전용: 나가기 버튼
-        leave_button = discord.ui.Button(
-            label="📤 나가기 (파티원용)",
-            style=discord.ButtonStyle.secondary,
-            custom_id="leave_party"
-        )
-        leave_button.callback = self.leave_party
-        self.add_item(leave_button)
-        
-        # 파티장 전용: 파티완료 버튼
-        complete_button = discord.ui.Button(
-            label="✅ 파티완료 (파티장용)",
-            style=discord.ButtonStyle.success,
-            custom_id="complete_party"
-        )
-        complete_button.callback = self.complete_party
-        self.add_item(complete_button)
-        
-        # 파티장 전용: 파티취소 버튼
-        cancel_button = discord.ui.Button(
-            label="❌ 파티취소 (파티장용)",
-            style=discord.ButtonStyle.danger,
-            custom_id="cancel_party"
-        )
-        cancel_button.callback = self.cancel_party
-        self.add_item(cancel_button)
-    
-    async def join_party(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        
-        # 파티장인 경우 제한
-        if user_id == self.party_data.leader_id:
-            await interaction.response.send_message(
-                "🚫 **파티장은 파티원용 버튼을 사용할 수 없습니다.**\n"
-                "파티 관리를 위해 **파티장 전용 버튼**을 사용해주세요.",
-                ephemeral=True
-            )
-            return
-        
-        # 이미 다른 파티에 참여중인지 확인
-        if user_id in user_party_status:
-            await interaction.response.send_message("이미 다른 파티에 참여중입니다.", ephemeral=True)
-            return
-        
-        # 이미 참여한 경우
-        if user_id in self.party_data.members:
-            await interaction.response.send_message("이미 파티에 참여하고 있습니다.", ephemeral=True)
-            return
-        
-        # 파티가 가득 찬 경우
-        if len(self.party_data.members) >= self.party_data.max_members:
-            await interaction.response.send_message("파티 인원이 가득 찼습니다.", ephemeral=True)
-            return
-        
-        # 파티 참여
-        self.party_data.members.append(user_id)
-        user_party_status[user_id] = self.party_data.message_id
-        
-        # 파티가 가득 찬 경우 상태 업데이트
-        if len(self.party_data.members) >= self.party_data.max_members:
-            self.party_data.is_full = True
-        
-        # 임베드 업데이트
-        leader = bot.get_user(self.party_data.leader_id)
-        embed = create_party_embed(self.party_data, leader)
-        
-        await interaction.response.edit_message(embed=embed, view=self)
-        
-    async def leave_party(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        
-        # 파티장인 경우 제한
-        if user_id == self.party_data.leader_id:
-            await interaction.response.send_message(
-                "🚫 **파티장은 파티원용 버튼을 사용할 수 없습니다.**\n"
-                "파티 관리를 위해 **파티장 전용 버튼**을 사용해주세요.",
-                ephemeral=True
-            )
-            return
-        
-        # 파티에 참여하지 않은 경우
-        if user_id not in self.party_data.members:
-            await interaction.response.send_message("파티에 참여하고 있지 않습니다.", ephemeral=True)
-            return
-        
-        # 파티 나가기
-        self.party_data.members.remove(user_id)
-        if user_id in user_party_status:
-            del user_party_status[user_id]
-        
-        # 파티가 가득 차지 않은 상태로 변경
-        if self.party_data.is_full:
-            self.party_data.is_full = False
-        
-        # 임베드 업데이트
-        leader = bot.get_user(self.party_data.leader_id)
-        embed = create_party_embed(self.party_data, leader)
-        
-        await interaction.response.edit_message(embed=embed, view=self)
-    
-    async def complete_party(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        
-        # 파티장 권한 확인
-        if user_id != self.party_data.leader_id:
-            await interaction.response.send_message(
-                "🚫 **파티장만 사용할 수 있는 기능입니다.**\n"
-                "파티원은 **파티원 전용 버튼**을 사용해주세요.",
-                ephemeral=True
-            )
-            return
-        
-        # 이미 완료된 파티인지 확인
-        if self.party_data.is_completed:
-            await interaction.response.send_message("이미 완료된 파티입니다.", ephemeral=True)
-            return
-        
-        # 파티 완료 처리
-        await complete_party_function(interaction, self.party_data)
-    
-    async def cancel_party(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        
-        # 파티장 권한 확인
-        if user_id != self.party_data.leader_id:
-            await interaction.response.send_message(
-                "🚫 **파티장만 사용할 수 있는 기능입니다.**\n"
-                "파티원은 **파티원 전용 버튼**을 사용해주세요.",
-                ephemeral=True
-            )
-            return
-        
-        # 이미 완료된 파티인지 확인
-        if self.party_data.is_completed:
-            await interaction.response.send_message("이미 완료된 파티는 취소할 수 없습니다.", ephemeral=True)
-            return
-        
-        # 버튼 클릭으로 파티 취소 처리 (메시지 직접 삭제)
-        await cancel_party_by_button(interaction, self.party_data)
 
+    async def on_timeout(self):
+        if self.resolved:
+            return
+        self.release(self.challenger.guild.id)
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(
+                embed=discord.Embed(
+                    title="같이놀기 종료",
+                    description=(
+                        f"{config.INVITE_TIME_LIMIT}초 안에 응답이 없어 자동으로 거절되었습니다. "
+                        "토큰 변동은 없습니다."
+                    ),
+                    color=COLOR_LOSE,
+                ),
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+
+@bot.tree.command(name="같이놀기", description="다른 인원과 토큰을 걸고 대결합니다.")
+@app_commands.guild_only()
+async def duo_play(interaction: discord.Interaction):
+    if not await try_acquire(interaction):
+        return
+    await interaction.response.send_modal(DuoSetupModal())
+
+
+# ============================================
+# 5. 토큰보유
+# ============================================
+class BalanceModal(BaseModal, title="토큰보유"):
+    def __init__(self):
+        super().__init__()
+
+        self.add_item(discord.ui.TextDisplay(
+            "선택한 인원의 보유 토큰량을 확인합니다.\n"
+            "서버에서 토큰을 가장 많이 보유한 5명도 함께 표시됩니다."
+        ))
+
+        self.target = discord.ui.UserSelect(
+            placeholder="확인할 인원을 선택하세요",
+            min_values=1,
+            max_values=1,
+            required=True,
+        )
+        self.add_item(discord.ui.Label(text="대상", component=self.target))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild_id = interaction.guild_id
+        selected = self.target.values
+        target = selected[0] if selected else None
+
+        if target is None:
+            await interaction.response.send_message(
+                embed=error_embed("대상을 선택해주세요."), ephemeral=True
+            )
+            return
+
+        is_bot = getattr(target, 'bot', False)
+        if not is_bot and not store.has_account(guild_id, target.id):
+            await store.grant_initial(guild_id, [target.id])
+
+        lines = []
+        for rank, (user_id, amount) in enumerate(store.top(guild_id, 5), start=1):
+            member = interaction.guild.get_member(user_id)
+            name = member.display_name if member else f"<@{user_id}>"
+            lines.append(f"{rank}등 : {name} / 토큰 보유량 {fmt(amount)}")
+
+        embed = discord.Embed(title="토큰 보유 현황", color=COLOR_NEUTRAL)
+        embed.add_field(
+            name="TOP 5",
+            value="\n".join(lines) if lines else "기록이 없습니다.",
+            inline=False,
+        )
+
+        if is_bot:
+            target_value = "봇은 토큰을 보유하지 않습니다."
+        else:
+            target_value = (
+                f"{target.display_name} / 토큰 보유량 "
+                f"{fmt(store.get_balance(guild_id, target.id))}"
+            )
+        embed.add_field(name="선택한 대상", value=target_value, inline=False)
+
+        await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="토큰보유", description="선택한 인원의 보유 토큰량을 확인합니다.")
+@app_commands.guild_only()
+async def check_balance(interaction: discord.Interaction):
+    await interaction.response.send_modal(BalanceModal())
+
+
+# ============================================
+# 이벤트
+# ============================================
 @bot.event
 async def on_ready():
     print('=== BOT READY EVENT TRIGGERED ===')
     print(f'Bot logged in as: {bot.user}')
     print(f'Bot ID: {bot.user.id}')
     print(f'Bot in {len(bot.guilds)} servers')
-    
+
     try:
         synced = await bot.tree.sync()
         print(f'Synced {len(synced)} slash commands')
@@ -490,728 +824,47 @@ async def on_ready():
             print(f'  - /{cmd.name}: {cmd.description}')
     except Exception as e:
         print(f'Sync error: {e}')
-    
-    try:
-        check_notifications.start()
-        print('Notification checker started')
-    except Exception as e:
-        print(f'Notification checker error: {e}')
-    
+
+    for guild in bot.guilds:
+        try:
+            await grant_initial_tokens(guild)
+        except Exception as e:
+            print(f'Initial grant error ({guild.id}): {e}')
+
+    if not daily_topup.is_running():
+        daily_topup.start()
+        print(f'Daily topup scheduled at {config.DAILY_RESET_HOUR:02d}:00 {config.TIMEZONE}')
+
     print('=== BOT INITIALIZATION COMPLETE ===')
 
-@bot.event
-async def on_command_error(ctx, error):
-    """명령어 에러 핸들링"""
-    print(f"Command error: {error}")
 
-@bot.event  
-async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-    """슬래시 명령어 에러 핸들링"""
+async def on_app_command_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+):
     print(f"App command error: {error}")
-    
-    if not interaction.response.is_done():
-        await interaction.response.send_message(
-            "❌ 명령어 실행 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-            ephemeral=True
-        )
-    else:
-        await interaction.followup.send(
-            "❌ 명령어 실행 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-            ephemeral=True
-        )
+    if interaction.guild_id:
+        play_lock.release(interaction.guild_id, interaction.user.id)
 
-@bot.tree.command(name="파티매칭", description="파티 모집을 시작합니다.")
-async def party_matching(interaction: discord.Interaction):
-    # 이미 파티에 참여중인지 확인
-    if interaction.user.id in user_party_status:
-        await interaction.response.send_message(
-            "이미 파티에 참여중입니다. 한 번에 하나의 파티에만 참여할 수 있습니다.",
-            ephemeral=True
-        )
-        return
-    
-    modal = PartySetupModal()
-    await interaction.response.send_modal(modal)
-
-@bot.tree.command(name="파티완료", description="파티장만 사용 가능: 파티 활동을 완료 처리합니다.")
-async def complete_party_command(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    
-    # 사용자가 파티에 참여중인지 확인
-    if user_id not in user_party_status:
-        await interaction.response.send_message("참여중인 파티가 없습니다.", ephemeral=True)
-        return
-    
-    party_message_id = user_party_status[user_id]
-    if party_message_id not in parties:
-        await interaction.response.send_message("파티 정보를 찾을 수 없습니다.", ephemeral=True)
-        return
-    
-    party_data = parties[party_message_id]
-    
-    # 파티장 권한 확인
-    if user_id != party_data.leader_id:
-        await interaction.response.send_message("파티장만 활동 완료 처리를 할 수 있습니다.", ephemeral=True)
-        return
-    
-    # 이미 완료된 파티인지 확인
-    if party_data.is_completed:
-        await interaction.response.send_message("이미 완료된 파티입니다.", ephemeral=True)
-        return
-    
-    # 파티 완료 처리
-    await complete_party_function(interaction, party_data)
-
-@bot.tree.command(name="파티취소", description="파티장만 사용 가능: 파티 모집을 취소합니다.")
-async def disband_party_command(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    
-    # 사용자가 파티에 참여중인지 확인
-    if user_id not in user_party_status:
-        await interaction.response.send_message("참여중인 파티가 없습니다.", ephemeral=True)
-        return
-    
-    party_message_id = user_party_status[user_id]
-    if party_message_id not in parties:
-        await interaction.response.send_message("파티 정보를 찾을 수 없습니다.", ephemeral=True)
-        return
-    
-    party_data = parties[party_message_id]
-    
-    # 파티장 권한 확인
-    if user_id != party_data.leader_id:
-        await interaction.response.send_message("파티장만 모집을 취소할 수 있습니다.", ephemeral=True)
-        return
-    
-    # 이미 완료된 파티인지 확인
-    if party_data.is_completed:
-        await interaction.response.send_message("이미 완료된 파티는 취소할 수 없습니다.", ephemeral=True)
-        return
-    
-    # 파티 취소 처리
-    await disband_party_function(interaction, party_data)
-
-async def complete_party_function(interaction: discord.Interaction, party_data: PartyData):
-    """파티 완료 처리 함수"""
-    completion_time = datetime.now()
-    
-    # 파티 완료 상태로 변경
-    party_data.is_completed = True
-    
-    # 모든 멤버의 파티 상태 해제
-    for member_id in party_data.members:
-        if member_id in user_party_status:
-            del user_party_status[member_id]
-    
-    # 원본 메시지 업데이트
+    message = "명령어 실행 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
     try:
-        channel = bot.get_channel(party_data.channel_id)
-        message = await channel.fetch_message(party_data.message_id)
-        leader = bot.get_user(party_data.leader_id)
-        embed = create_party_embed(party_data, leader)
-        await message.edit(embed=embed, view=None)
-    except:
-        pass  # 메시지를 찾을 수 없는 경우 무시
-    
-    # 파티 완료 기록을 채널에 남김
-    completion_embed = discord.Embed(
-        title="파티 활동 완료 기록",
-        description=f"**{party_data.purpose}** 파티가 성공적으로 완료되었습니다!",
-        color=discord.Color.green(),
-        timestamp=completion_time
-    )
-    
-    # 파티 정보
-    leader = bot.get_user(party_data.leader_id)
-    completion_embed.add_field(
-        name="파티장",
-        value=leader.display_name if leader else f"<@{party_data.leader_id}>",
-        inline=True
-    )
-    
-    completion_embed.add_field(
-        name="출발 시간",
-        value=party_data.departure_time.strftime("%Y년 %m월 %d일 %H:%M"),
-        inline=True
-    )
-    
-    completion_embed.add_field(
-        name="완료 시간",
-        value=completion_time.strftime("%Y년 %m월 %d일 %H:%M"),
-        inline=True
-    )
-    
-    # 참여 멤버 목록
-    member_list = []
-    for i, member_id in enumerate(party_data.members, 1):
-        user = bot.get_user(member_id)
-        role = "파티장" if member_id == party_data.leader_id else "멤버"
-        
-        if user:
-            member_list.append(f"{i}. {user.display_name} ({role})")
-        else:
-            member_list.append(f"{i}. <@{member_id}> ({role})")
-    
-    completion_embed.add_field(
-        name=f"참여 멤버 ({len(party_data.members)}명)",
-        value="\n".join(member_list),
-        inline=False
-    )
-    
-    # 스펙컷이 있었다면 기록
-    if party_data.spec_cuts:
-        spec_text = "\n".join([f"• {spec}" for spec in party_data.spec_cuts])
-        completion_embed.add_field(
-            name="스펙컷",
-            value=spec_text,
-            inline=False
-        )
-    
-    # 활동 시간 계산
-    activity_duration = completion_time - party_data.departure_time
-    hours = int(activity_duration.total_seconds() // 3600)
-    minutes = int((activity_duration.total_seconds() % 3600) // 60)
-    
-    if hours > 0:
-        duration_text = f"{hours}시간 {minutes}분"
-    else:
-        duration_text = f"{minutes}분"
-    
-    completion_embed.add_field(
-        name="활동 시간",
-        value=duration_text,
-        inline=True
-    )
-    
-    completion_embed.set_footer(text="파티 시스템에 의해 자동 기록됨")
-    
-    # 완료 기록을 채널에 전송
-    await interaction.response.send_message(embed=completion_embed)
-    
-    # 파티 데이터에서 제거 (기록은 이미 채널에 남겨짐)
-    if party_data.message_id in parties:
-        del parties[party_data.message_id]
-
-async def cancel_party_by_button(interaction: discord.Interaction, party_data: PartyData):
-    """버튼 클릭으로 파티 취소 처리 (메시지 직접 삭제)"""
-    
-    # 파티원들에게 취소 알림 전송 (파티장 제외)
-    party_members = [member_id for member_id in party_data.members if member_id != party_data.leader_id]
-    
-    if party_members:
-        try:
-            # 파티원들에게 DM으로 알림
-            for member_id in party_members:
-                user = bot.get_user(member_id)
-                if user:
-                    try:
-                        await user.send(
-                            f"📢 **파티 취소 알림**\n\n"
-                            f"참여하고 계신 **'{party_data.purpose}'** 파티가 파티장에 의해 취소되었습니다.\n"
-                            f"출발 예정 시간: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
-                        )
-                    except:
-                        # DM 전송 실패 시 무시 (DM 차단된 경우 등)
-                        pass
-        except Exception as e:
-            print(f"Party disband notification sending error: {e}")
-    
-    # 모든 멤버의 파티 상태 해제
-    for member_id in party_data.members:
-        if member_id in user_party_status:
-            del user_party_status[member_id]
-    
-    # 파티 데이터 삭제
-    if party_data.message_id in parties:
-        del parties[party_data.message_id]
-    
-    try:
-        # 파티장에게 취소 완료 응답 (먼저 응답)
-        cancel_message = f"✅ **'{party_data.purpose}'** 파티 모집이 취소되었습니다.\n모집창을 삭제합니다."
-        
-        if party_members:
-            cancel_message += f"\n📨 파티원 {len(party_members)}명에게 취소 알림을 전송했습니다."
-        
-        await interaction.response.send_message(cancel_message, ephemeral=True)
-        
-        # 그 다음 메시지 삭제 (버튼이 있는 원본 메시지)
-        await interaction.message.delete()
-        
-    except Exception as e:
-        print(f"Button party disband error: {e}")
-        # 메시지 삭제 실패 시 대체 응답
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "파티 모집이 취소되었습니다.",
-                    ephemeral=True
-                )
-        except:
-            pass
-
-async def disband_party_function(interaction: discord.Interaction, party_data: PartyData):
-    """파티 취소 처리 함수 (슬래시 명령어용)"""
-    
-    # 파티원들에게 취소 알림 전송 (파티장 제외)
-    party_members = [member_id for member_id in party_data.members if member_id != party_data.leader_id]
-    
-    if party_members:
-        try:
-            # 파티원들에게 DM으로 알림
-            for member_id in party_members:
-                user = bot.get_user(member_id)
-                if user:
-                    try:
-                        await user.send(
-                            f"📢 **파티 취소 알림**\n\n"
-                            f"참여하고 계신 **'{party_data.purpose}'** 파티가 파티장에 의해 취소되었습니다.\n"
-                            f"출발 예정 시간: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
-                        )
-                    except:
-                        # DM 전송 실패 시 무시 (DM 차단된 경우 등)
-                        pass
-        except Exception as e:
-            print(f"Party disband notification sending error: {e}")
-    
-    # 모든 멤버의 파티 상태 해제
-    for member_id in party_data.members:
-        if member_id in user_party_status:
-            del user_party_status[member_id]
-    
-    # 파티 데이터 삭제
-    if party_data.message_id in parties:
-        del parties[party_data.message_id]
-    
-    # 원본 메시지 삭제
-    try:
-        channel = bot.get_channel(party_data.channel_id)
-        message = await channel.fetch_message(party_data.message_id)
-        
-        # 메시지 완전 삭제
-        await message.delete()
-        
-        # 취소 완료 응답
-        cancel_message = f"✅ **'{party_data.purpose}'** 파티 모집이 취소되었습니다.\n모집창이 삭제되었습니다."
-        
-        if party_members:
-            cancel_message += f"\n📨 파티원 {len(party_members)}명에게 취소 알림을 전송했습니다."
-        
-        await interaction.response.send_message(cancel_message, ephemeral=True)
-        
-    except Exception as e:
-        print(f"Party disband error: {e}")
-        # 메시지 삭제 실패 시 대체 응답
-        await interaction.response.send_message(
-            "파티 모집이 취소되었습니다.",
-            ephemeral=True
-        )
-
-@tasks.loop(minutes=1)
-async def check_notifications():
-    """1분마다 실행되어 출발 시간 10분 전 알림을 확인"""
-    current_time = datetime.now()
-    
-    for message_id, party_data in parties.items():
-        if party_data.departure_time and not party_data.notification_sent and not party_data.is_completed:
-            time_diff = party_data.departure_time - current_time
-            
-            # 출발 시간 10분 전이고 아직 알림을 보내지 않은 경우
-            if timedelta(minutes=9) <= time_diff <= timedelta(minutes=10):
-                try:
-                    channel = bot.get_channel(party_data.channel_id)
-                    if channel:
-                        # 참여 멤버들에게 알림
-                        mentions = " ".join([f"<@{member_id}>" for member_id in party_data.members])
-                        await channel.send(
-                            f"**파티 출발 알림**\n"
-                            f"{mentions}\n"
-                            f"'{party_data.purpose}' 파티가 10분 후 출발합니다!\n"
-                            f"출발 시간: {party_data.departure_time.strftime('%Y년 %m월 %d일 %H:%M')}"
-                        )
-                        party_data.notification_sent = True
-                except Exception as e:
-                    print(f"Notification sending error: {e}")
-
-# ============================================
-# 마비노기 경매장 기능
-# ============================================
-
-# 마비노기 아이템 카테고리 리스트
-MABINOGI_CATEGORIES = [
-    "개조석", "검", "경갑옷", "기타", "기타 소모품", "기타 스크롤", "기타 장비", 
-    "기타 재료", "꼬리", "날개", "낭만농장/달빛섬", "너클", "던전 통행증", "도끼", 
-    "도면", "둔기", "듀얼건", "랜스", "로브", "마기그래프", "마기그래프 도안", 
-    "마도서", "마리오네트", "마법가루", "마비노벨", "마족 스크롤", "말풍선 스티커", 
-    "매직 크래프트", "모자/가발", "방패", "변신 메달", "보석", "분양 메달", 
-    "불타래", "뷰티 쿠폰", "생활 도구", "석궁", "수리검", "스케치", "스태프", 
-    "신발", "실린더", "아틀라틀", "악기", "알반 훈련석", "액세서리", "양손 장비", 
-    "얼굴 장식", "에이도스", "에코스톤", "염색 앰플", "오브", "옷본", 
-    "원거리 소모품", "원드", "음식", "의자/사물", "인챈트 스크롤", "장갑", 
-    "제련/블랙스미스", "제스처", "주머니", "중갑옷", "책", "천옷", "천옷/방직", 
-    "체인 블레이드", "토템", "팔리아스 유물", "퍼퓸", "페이지", "포션", 
-    "피니 펫", "핀즈비즈", "한손 장비", "핸들", "허브", "활", "힐웬 공학"
-]
-
-async def call_mabinogi_api(endpoint: str, params: dict = None):
-    """마비노기 API 호출 함수"""
-    url = f"{config.MABINOGI_API_BASE_URL}{endpoint}"
-    headers = {
-        "x-nxopen-api-key": config.MABINOGI_API_KEY,
-        "Content-Type": "application/json"
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, params=params) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    print(f"API Error: {response.status} - {await response.text()}")
-                    return None
-    except Exception as e:
-        print(f"API Exception: {e}")
-        return None
-
-async def search_auction_items(item_name: str = None, category: str = None, keyword: str = None, cursor: str = ""):
-    """경매장 아이템 검색"""
-    params = {"cursor": cursor}
-    
-    if keyword:
-        endpoint = "/mabinogi/v1/auction/keyword-search"
-        params["keyword"] = keyword
-    else:
-        endpoint = "/mabinogi/v1/auction/list"
-        if item_name:
-            params["item_name"] = item_name
-        if category:
-            params["auction_item_category"] = category
-    
-    return await call_mabinogi_api(endpoint, params)
-
-async def search_auction_history(item_name: str = None, category: str = None, cursor: str = ""):
-    """경매장 거래 내역 조회"""
-    params = {"cursor": cursor}
-    
-    if item_name:
-        params["item_name"] = item_name
-    if category:
-        params["auction_item_category"] = category
-    
-    return await call_mabinogi_api("/mabinogi/v1/auction/history", params)
-
-class AuctionSearchModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="마비노기 경매장 검색")
-        
-        # 검색 방식 선택 (아이템명/키워드)
-        self.search_type = discord.ui.TextInput(
-            label="검색 방식",
-            placeholder="1: 아이템명 검색, 2: 키워드 검색, 3: 거래내역 조회",
-            required=True,
-            max_length=1
-        )
-        
-        # 검색어
-        self.search_term = discord.ui.TextInput(
-            label="검색어",
-            placeholder="검색할 아이템명 또는 키워드를 입력하세요",
-            required=True,
-            max_length=100
-        )
-        
-        # 카테고리 (선택사항)
-        self.category = discord.ui.TextInput(
-            label="카테고리 (선택사항)",
-            placeholder="예: 검, 방패, 포션 등 (빈칸 가능)",
-            required=False,
-            max_length=50
-        )
-        
-        self.add_item(self.search_type)
-        self.add_item(self.search_term)
-        self.add_item(self.category)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            search_type = self.search_type.value.strip()
-            search_term = self.search_term.value.strip()
-            category = self.category.value.strip() if self.category.value.strip() else None
-            
-            # 검색 방식 유효성 검사
-            if search_type not in ['1', '2', '3']:
-                await interaction.response.send_message(
-                    "❌ 검색 방식은 1(아이템명), 2(키워드), 3(거래내역) 중 하나를 입력해주세요.",
-                    ephemeral=True
-                )
-                return
-            
-            # 카테고리 유효성 검사
-            if category and category not in MABINOGI_CATEGORIES:
-                await interaction.response.send_message(
-                    f"❌ 올바르지 않은 카테고리입니다.\n"
-                    f"**사용 가능한 카테고리:** {', '.join(MABINOGI_CATEGORIES[:10])}...",
-                    ephemeral=True
-                )
-                return
-            
-            await interaction.response.defer()
-            
-            # API 호출
-            if search_type == '1':  # 아이템명 검색
-                result = await search_auction_items(item_name=search_term, category=category)
-            elif search_type == '2':  # 키워드 검색
-                result = await search_auction_items(keyword=search_term, category=category)
-            else:  # 거래내역 조회
-                result = await search_auction_history(item_name=search_term, category=category)
-            
-            if not result:
-                await interaction.followup.send("❌ API 호출에 실패했습니다. 잠시 후 다시 시도해주세요.")
-                return
-            
-            # 결과가 없는 경우
-            items_key = "auction_item" if search_type != '3' else "auction_history"
-            items = result.get(items_key, [])
-            
-            if not items:
-                search_type_text = "아이템명" if search_type == '1' else "키워드" if search_type == '2' else "거래내역"
-                await interaction.followup.send(f"🔍 **{search_type_text} 검색 결과**\n검색어: `{search_term}`\n\n❌ 검색 결과가 없습니다.")
-                return
-            
-            # 결과 표시
-            embed = create_auction_embed(items, search_term, search_type, 0)
-            view = AuctionView(items, search_term, search_type, result.get("next_cursor"))
-            
-            await interaction.followup.send(embed=embed, view=view)
-            
-        except Exception as e:
-            print(f"Auction search error: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-                    ephemeral=True
-                )
-
-def create_auction_embed(items: list, search_term: str, search_type: str, page: int):
-    """경매장 검색 결과 임베드 생성"""
-    search_type_text = "아이템명" if search_type == '1' else "키워드" if search_type == '2' else "거래내역"
-    
-    if search_type == '3':  # 거래내역
-        embed = discord.Embed(
-            title="마비노기 경매장 거래내역",
-            description=f"**{search_type_text} 검색:** `{search_term}`",
-            color=discord.Color.gold()
-        )
-    else:  # 현재 매물
-        embed = discord.Embed(
-            title="마비노기 경매장 검색",
-            description=f"**{search_type_text} 검색:** `{search_term}`",
-            color=discord.Color.blue()
-        )
-    
-    # 페이지 처리 (한 페이지에 5개씩)
-    items_per_page = 5
-    start_idx = page * items_per_page
-    end_idx = start_idx + items_per_page
-    page_items = items[start_idx:end_idx]
-    
-    if not page_items:
-        embed.add_field(
-            name="❌ 검색 결과 없음",
-            value="해당 페이지에 표시할 아이템이 없습니다.",
-            inline=False
-        )
-        return embed
-    
-    for i, item in enumerate(page_items, 1):
-        # 가격 포맷팅
-        price = item.get('auction_price_per_unit', 0)
-        price_text = f"{price:,}골드"
-        
-        # 만료/거래 시간
-        if search_type == '3':  # 거래내역
-            time_field = item.get('date_auction_buy', '')
-            time_text = f"거래시간: {time_field.replace('T', ' ').replace('Z', ' UTC')}"
-        else:  # 현재 매물
-            time_field = item.get('date_auction_expire', '')
-            time_text = f"만료시간: {time_field.replace('T', ' ').replace('Z', ' UTC')}"
-        
-        # 아이템 정보
-        item_name = item.get('item_display_name', item.get('item_name', '알 수 없음'))
-        item_count = item.get('item_count', 1)
-        category = item.get('auction_item_category', '기타')
-        
-        count_text = f" x{item_count}" if item_count > 1 else ""
-        
-        embed.add_field(
-            name=f"{start_idx + i}. {item_name}{count_text}",
-            value=f"**{price_text}** (개당)\n"
-                  f"카테고리: {category}\n"
-                  f"{time_text}",
-            inline=False
-        )
-    
-    # 페이지 정보
-    total_pages = (len(items) - 1) // items_per_page + 1
-    embed.set_footer(text=f"페이지 {page + 1}/{total_pages} • 총 {len(items)}개 아이템")
-    
-    return embed
-
-class QuickAuctionView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=300)
-    
-    @discord.ui.button(label=" 검 검색", style=discord.ButtonStyle.primary)
-    async def search_sword(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.quick_search(interaction, "검", "검")
-    
-    @discord.ui.button(label=" 방패 검색", style=discord.ButtonStyle.primary)
-    async def search_shield(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.quick_search(interaction, "방패", "방패")
-    
-    @discord.ui.button(label=" 포션 검색", style=discord.ButtonStyle.primary)
-    async def search_potion(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.quick_search(interaction, "포션", "포션")
-    
-    @discord.ui.button(label=" 인챈트 스크롤", style=discord.ButtonStyle.secondary)
-    async def search_enchant(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.quick_search(interaction, "인챈트", "인챈트 스크롤")
-    
-    async def quick_search(self, interaction: discord.Interaction, keyword: str, category: str = None):
-        await interaction.response.defer()
-        
-        try:
-            result = await search_auction_items(keyword=keyword, category=category)
-            
-            if not result:
-                await interaction.followup.send("❌ API 호출에 실패했습니다.")
-                return
-            
-            items = result.get("auction_item", [])
-            
-            if not items:
-                await interaction.followup.send(f"🔍 **{keyword} 검색 결과**\n\n❌ 검색 결과가 없습니다.")
-                return
-            
-            embed = create_auction_embed(items, keyword, '2', 0)
-            view = AuctionView(items, keyword, '2', result.get("next_cursor"))
-            
-            await interaction.followup.send(embed=embed, view=view)
-            
-        except Exception as e:
-            print(f"Quick search error: {e}")
-            await interaction.followup.send("❌ 검색 중 오류가 발생했습니다.")
-
-class AuctionView(discord.ui.View):
-    def __init__(self, items: list, search_term: str, search_type: str, next_cursor: str = None):
-        super().__init__(timeout=300)  # 5분 타임아웃
-        self.items = items
-        self.search_term = search_term
-        self.search_type = search_type
-        self.next_cursor = next_cursor
-        self.current_page = 0
-        self.items_per_page = 5
-        self.total_pages = (len(items) - 1) // self.items_per_page + 1
-        
-        # 페이지가 1페이지뿐이면 이전/다음 버튼 비활성화
-        if self.total_pages <= 1:
-            self.prev_button.disabled = True
-            self.next_button.disabled = True
-    
-    @discord.ui.button(label="◀ 이전", style=discord.ButtonStyle.secondary)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page > 0:
-            self.current_page -= 1
-            embed = create_auction_embed(self.items, self.search_term, self.search_type, self.current_page)
-            await interaction.response.edit_message(embed=embed, view=self)
-        else:
-            await interaction.response.send_message("❌ 첫 번째 페이지입니다.", ephemeral=True)
-    
-    @discord.ui.button(label="▶ 다음", style=discord.ButtonStyle.secondary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page < self.total_pages - 1:
-            self.current_page += 1
-            embed = create_auction_embed(self.items, self.search_term, self.search_type, self.current_page)
-            await interaction.response.edit_message(embed=embed, view=self)
-        else:
-            await interaction.response.send_message("❌ 마지막 페이지입니다.", ephemeral=True)
-    
-    @discord.ui.button(label="🔄 새로고침", style=discord.ButtonStyle.primary)
-    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        
-        try:
-            # API 재호출
-            if self.search_type == '1':  # 아이템명 검색
-                result = await search_auction_items(item_name=self.search_term)
-            elif self.search_type == '2':  # 키워드 검색
-                result = await search_auction_items(keyword=self.search_term)
-            else:  # 거래내역 조회
-                result = await search_auction_history(item_name=self.search_term)
-            
-            if result:
-                items_key = "auction_item" if self.search_type != '3' else "auction_history"
-                self.items = result.get(items_key, [])
-                self.next_cursor = result.get("next_cursor")
-                self.current_page = 0  # 첫 페이지로 리셋
-                self.total_pages = (len(self.items) - 1) // self.items_per_page + 1
-                
-                embed = create_auction_embed(self.items, self.search_term, self.search_type, self.current_page)
-                await interaction.followup.edit_message(interaction.message.id, embed=embed, view=self)
-            else:
-                await interaction.followup.send("❌ 새로고침에 실패했습니다.", ephemeral=True)
-                
-        except Exception as e:
-            print(f"Refresh error: {e}")
-            await interaction.followup.send("❌ 새로고침 중 오류가 발생했습니다.", ephemeral=True)
-
-@bot.tree.command(name="경매장테스트", description="경매장 기능 테스트")
-async def auction_test(interaction: discord.Interaction):
-    """경매장 기능 테스트용 명령어"""
-    await interaction.response.send_message(
-        "**경매장 기능 테스트 성공!**\n\n"
-        "기본 상호작용이 정상 작동합니다.\n"
-        "이제 `/경매장` 명령어를 시도해보세요!",
-        ephemeral=True
-    )
-
-@bot.tree.command(name="경매장", description="마비노기 경매장에서 아이템을 검색합니다.")
-async def auction_search(interaction: discord.Interaction):
-    try:
-        modal = AuctionSearchModal()
-        await interaction.response.send_modal(modal)
-    except discord.errors.NotFound:
-        # Interaction이 만료된 경우 대체 응답
-        await interaction.followup.send(
-            "❌ 상호작용이 만료되었습니다. 명령어를 다시 시도해주세요.",
-            ephemeral=True
-        )
-    except Exception as e:
-        print(f"Auction command error: {e}")
-        # 모달 전송 실패 시 대체 방법 제공
         if not interaction.response.is_done():
-            await interaction.response.send_message(
-                "**마비노기 경매장 검색 (임시 버전)**\n\n"
-                "현재 모달창에 문제가 있어 임시로 이 방식을 사용합니다.\n"
-                "아래 버튼을 눌러 검색해보세요!",
-                view=QuickAuctionView(),
-                ephemeral=True
-            )
+            await interaction.response.send_message(embed=error_embed(message), ephemeral=True)
         else:
-            await interaction.followup.send(
-                "❌ 경매장 기능에 문제가 발생했습니다. 관리자에게 문의해주세요.",
-                ephemeral=True
-            )
+            await interaction.followup.send(embed=error_embed(message), ephemeral=True)
+    except discord.HTTPException:
+        pass
+
+
+bot.tree.on_error = on_app_command_error
+
 
 # ============================================
 # 봇 실행
 # ============================================
-
-# 봇 실행
 if __name__ == "__main__":
-    # HTTP 서버 시작
+    store.load()
+
     http_thread = threading.Thread(target=start_http_server, daemon=True)
     http_thread.start()
 
-    bot.run(config.DISCORD_TOKEN) 
-
-    
+    bot.run(config.DISCORD_TOKEN)

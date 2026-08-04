@@ -28,3 +28,6 @@ Thumbs.db
 
 # 임시 파일
 *.tmp 
+
+# 토큰 데이터
+data/
