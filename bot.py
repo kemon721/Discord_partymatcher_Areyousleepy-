@@ -862,6 +862,13 @@ bot.tree.on_error = on_app_command_error
 # 봇 실행
 # ============================================
 if __name__ == "__main__":
+    if config.DATA_IS_PERSISTENT:
+        print(f"[storage] 퍼시스턴트 디스크에 저장합니다: {config.DATA_DIR}")
+    else:
+        print(
+            f"[storage] 경고: {config.DATA_DIR} 은(는) 퍼시스턴트 디스크가 아닙니다. "
+            "재배포·재시작 시 토큰 데이터가 사라집니다."
+        )
     store.load()
 
     http_thread = threading.Thread(target=start_http_server, daemon=True)

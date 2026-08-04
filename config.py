@@ -14,9 +14,19 @@ if not DISCORD_TOKEN:
 # ============================================
 # 데이터 저장 위치
 # ============================================
-# Render에서 퍼시스턴트 디스크를 붙였다면 그 마운트 경로를 DATA_DIR로 지정한다.
-# 지정하지 않으면 프로젝트 폴더의 data/ 를 사용하며, 이 경우 재배포 시 초기화된다.
-DATA_DIR = os.getenv('DATA_DIR', 'data')
+# Render 퍼시스턴트 디스크의 기본 마운트 경로.
+RENDER_DISK_PATH = '/var/data'
+
+# 마운트된 디스크가 있으면 그쪽에, 없으면 프로젝트 폴더의 data/ 에 저장한다.
+# DATA_DIR 환경변수를 지정하면 그 값이 항상 우선한다.
+DATA_DIR = os.getenv('DATA_DIR') or (
+    RENDER_DISK_PATH if os.path.isdir(RENDER_DISK_PATH) else 'data'
+)
+
+# 디스크가 아닌 곳에 저장 중이면 재배포·재시작 시 데이터가 사라진다.
+DATA_IS_PERSISTENT = os.path.isdir(RENDER_DISK_PATH) and os.path.abspath(DATA_DIR).startswith(
+    os.path.abspath(RENDER_DISK_PATH)
+)
 
 # ============================================
 # 채널 추천
