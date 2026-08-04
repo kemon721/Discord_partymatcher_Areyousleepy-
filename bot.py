@@ -2,7 +2,7 @@ import os
 import random
 import threading
 import time
-from datetime import time as dt_time
+from datetime import datetime, time as dt_time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -181,17 +181,49 @@ async def grant_initial_tokens(guild: discord.Guild) -> int:
     return granted
 
 
+def today_kst() -> str:
+    return datetime.now(KST).date().isoformat()
+
+
+def topup_missed(guild_id: int) -> bool:
+    """오늘 보정 시각이 지났는데 아직 오늘 보정을 하지 않았는지 확인한다."""
+    now = datetime.now(KST)
+    if now.hour < config.DAILY_RESET_HOUR:
+        # 오늘 보정 시각이 아직 오지 않았다. 예정된 실행을 기다리면 된다.
+        return False
+    return store.get_last_topup(guild_id) != now.date().isoformat()
+
+
+async def run_topup(guild: discord.Guild) -> None:
+    members = human_members(guild)
+    await store.grant_initial(guild.id, members)
+    changed = await store.daily_topup(guild.id, members, today_kst())
+    print(f"[tokens] {guild.name}: {changed}명의 보유량을 {config.DAILY_FLOOR}으로 맞췄습니다.")
+
+
 @tasks.loop(time=dt_time(hour=config.DAILY_RESET_HOUR, tzinfo=KST))
 async def daily_topup():
     """매일 지정 시각에 보유량이 기준선 미만인 인원을 기준선으로 맞춘다."""
     for guild in bot.guilds:
         try:
-            members = human_members(guild)
-            await store.grant_initial(guild.id, members)
-            changed = await store.daily_topup(guild.id, members)
-            print(f"[tokens] {guild.name}: {changed}명의 보유량을 {config.DAILY_FLOOR}으로 맞췄습니다.")
+            await run_topup(guild)
         except Exception as e:
             print(f"Daily topup error ({guild.id}): {e}")
+
+
+async def catch_up_topup() -> None:
+    """봇이 보정 시각에 꺼져 있었으면 시작 직후에 한 번 따라잡는다.
+
+    시간 지정 루프는 놓친 실행을 다시 하지 않으므로, 재시작 시점이 언제든
+    그날 보정이 한 번은 이뤄지도록 여기서 확인한다.
+    """
+    for guild in bot.guilds:
+        try:
+            if topup_missed(guild.id):
+                print(f"[tokens] {guild.name}: 오늘 보정 기록이 없어 지금 실행합니다.")
+                await run_topup(guild)
+        except Exception as e:
+            print(f"Catch-up topup error ({guild.id}): {e}")
 
 
 @daily_topup.before_loop
@@ -830,6 +862,8 @@ async def on_ready():
             await grant_initial_tokens(guild)
         except Exception as e:
             print(f'Initial grant error ({guild.id}): {e}')
+
+    await catch_up_topup()
 
     if not daily_topup.is_running():
         daily_topup.start()

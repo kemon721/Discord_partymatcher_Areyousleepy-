@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 import tempfile
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import config
 
@@ -20,6 +20,8 @@ class TokenStore:
         self._lock = asyncio.Lock()
         # {guild_id(str): {user_id(str): balance(int)}}
         self._balances: Dict[str, Dict[str, int]] = {}
+        # {guild_id(str): "YYYY-MM-DD"} - 마지막으로 일일 보정을 한 날짜
+        self._last_topup: Dict[str, str] = {}
         self._loaded = False
 
     # ------------------------------------------------------------------
@@ -36,9 +38,11 @@ class TokenStore:
                 str(gid): {str(uid): int(amount) for uid, amount in members.items()}
                 for gid, members in balances.items()
             }
+            self._last_topup = {str(gid): str(day) for gid, day in raw.get('last_topup', {}).items()}
             print(f"[storage] {self.path} 에서 {sum(len(m) for m in self._balances.values())}건을 불러왔습니다.")
         except FileNotFoundError:
             self._balances = {}
+            self._last_topup = {}
             print(f"[storage] {self.path} 이(가) 없어 새로 시작합니다.")
         except (json.JSONDecodeError, ValueError) as e:
             # 파일이 깨진 경우 백업만 남기고 빈 상태로 시작한다.
@@ -49,12 +53,13 @@ class TokenStore:
             except OSError:
                 pass
             self._balances = {}
+            self._last_topup = {}
         self._loaded = True
 
     def _write(self) -> None:
         """임시 파일에 쓴 뒤 교체해서 중간에 끊겨도 파일이 깨지지 않게 한다."""
         os.makedirs(self.data_dir, exist_ok=True)
-        payload = {'version': 1, 'balances': self._balances}
+        payload = {'version': 1, 'balances': self._balances, 'last_topup': self._last_topup}
         fd, tmp_path = tempfile.mkstemp(dir=self.data_dir, prefix='tokens-', suffix='.tmp')
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -84,6 +89,10 @@ class TokenStore:
     def get_balance(self, guild_id: int, user_id: int) -> int:
         return self._guild(guild_id).get(str(user_id), 0)
 
+    def get_last_topup(self, guild_id: int) -> Optional[str]:
+        """마지막으로 일일 보정을 한 날짜(YYYY-MM-DD). 기록이 없으면 None."""
+        return self._last_topup.get(str(guild_id))
+
     def top(self, guild_id: int, count: int = 5) -> List[Tuple[int, int]]:
         """보유량 상위 인원을 (user_id, balance) 목록으로 돌려준다."""
         members = self._guild(guild_id)
@@ -111,8 +120,12 @@ class TokenStore:
                 await asyncio.to_thread(self._write)
             return granted
 
-    async def daily_topup(self, guild_id: int, user_ids: Iterable[int]) -> int:
-        """보유량이 기준선 미만인 인원을 기준선으로 맞춘다. 보정된 인원 수를 돌려준다."""
+    async def daily_topup(self, guild_id: int, user_ids: Iterable[int], day: str) -> int:
+        """보유량이 기준선 미만인 인원을 기준선으로 맞춘다. 보정된 인원 수를 돌려준다.
+
+        보정한 날짜(day)를 함께 기록해서, 봇이 재시작해도 그날 보정을 이미 했는지
+        판단할 수 있게 한다. 바뀐 인원이 없어도 날짜는 기록한다.
+        """
         async with self._lock:
             members = self._guild(guild_id)
             changed = 0
@@ -121,8 +134,8 @@ class TokenStore:
                 if members.get(key, 0) < config.DAILY_FLOOR:
                     members[key] = config.DAILY_FLOOR
                     changed += 1
-            if changed:
-                await asyncio.to_thread(self._write)
+            self._last_topup[str(guild_id)] = day
+            await asyncio.to_thread(self._write)
             return changed
 
     async def adjust(self, guild_id: int, user_id: int, delta: int) -> int:
