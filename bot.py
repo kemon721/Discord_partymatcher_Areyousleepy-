@@ -1,3 +1,4 @@
+import hashlib
 import os
 import random
 import threading
@@ -869,6 +870,57 @@ async def check_balance(interaction: discord.Interaction):
 # ============================================
 # 이벤트
 # ============================================
+def command_signature() -> str:
+    """등록된 명령어 목록의 지문. 내용이 바뀌면 값이 달라진다."""
+    items = []
+    for cmd in bot.tree.walk_commands():
+        params = ",".join(f"{p.name}:{p.type}" for p in getattr(cmd, 'parameters', []))
+        items.append(f"{cmd.name}|{getattr(cmd, 'description', '')}|{params}")
+    return hashlib.sha256("\n".join(sorted(items)).encode('utf-8')).hexdigest()
+
+
+def signature_path() -> str:
+    return os.path.join(config.DATA_DIR, 'commands.sig')
+
+
+def read_saved_signature() -> str:
+    try:
+        with open(signature_path(), 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
+def save_signature(signature: str) -> None:
+    try:
+        os.makedirs(config.DATA_DIR, exist_ok=True)
+        with open(signature_path(), 'w', encoding='utf-8') as f:
+            f.write(signature)
+    except OSError as e:
+        print(f'Signature save error: {e}')
+
+
+async def sync_commands_if_changed() -> None:
+    """명령어가 바뀌었을 때만 동기화한다.
+
+    글로벌 동기화는 디스코드에서 강하게 제한하는 요청이라, 재배포마다 호출하면
+    IP 단위로 차단(Cloudflare 1015)될 수 있다.
+    """
+    signature = command_signature()
+    if not config.FORCE_SYNC and signature == read_saved_signature():
+        print(f'Commands unchanged, skipping sync ({len(bot.tree.get_commands())} commands)')
+        return
+
+    try:
+        synced = await bot.tree.sync()
+        save_signature(signature)
+        print(f'Synced {len(synced)} slash commands')
+        for cmd in synced:
+            print(f'  - /{cmd.name}: {cmd.description}')
+    except Exception as e:
+        print(f'Sync error: {e}')
+
+
 @bot.event
 async def on_ready():
     print('=== BOT READY EVENT TRIGGERED ===')
@@ -876,13 +928,7 @@ async def on_ready():
     print(f'Bot ID: {bot.user.id}')
     print(f'Bot in {len(bot.guilds)} servers')
 
-    try:
-        synced = await bot.tree.sync()
-        print(f'Synced {len(synced)} slash commands')
-        for cmd in synced:
-            print(f'  - /{cmd.name}: {cmd.description}')
-    except Exception as e:
-        print(f'Sync error: {e}')
+    await sync_commands_if_changed()
 
     for guild in bot.guilds:
         try:
@@ -935,4 +981,12 @@ if __name__ == "__main__":
     http_thread = threading.Thread(target=start_http_server, daemon=True)
     http_thread.start()
 
-    bot.run(config.DISCORD_TOKEN)
+    try:
+        bot.run(config.DISCORD_TOKEN)
+    except Exception as e:
+        # 곧바로 종료하면 호스팅 쪽에서 즉시 재시작하고, 그 재시도가 디스코드의
+        # 속도 제한을 더 길게 만든다. 잠시 기다렸다가 종료해 간격을 벌린다.
+        print(f"봇 실행 실패: {type(e).__name__}: {e}")
+        print(f"{config.RESTART_BACKOFF}초 후 종료합니다. (재시작 간격 확보)")
+        time.sleep(config.RESTART_BACKOFF)
+        raise
