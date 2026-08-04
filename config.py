@@ -67,6 +67,10 @@ FORCE_SYNC = os.getenv('FORCE_SYNC', '').strip() in ('1', 'true', 'True')
 # 곧바로 종료하면 Render가 즉시 재시작해 디스코드 속도 제한이 길어진다.
 RESTART_BACKOFF = int(os.getenv('RESTART_BACKOFF', '120'))
 
+# 속도 제한(429 / Cloudflare 1015)으로 실패했을 때의 대기 시간(초).
+# 이 차단은 접속을 계속 시도하면 만료 시각이 갱신되므로, 훨씬 길게 쉬어야 풀린다.
+RATE_LIMIT_BACKOFF = int(os.getenv('RATE_LIMIT_BACKOFF', '3600'))
+
 # ============================================
 # 시간 제한 (초)
 # ============================================

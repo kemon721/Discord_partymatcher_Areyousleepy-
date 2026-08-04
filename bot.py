@@ -983,10 +983,24 @@ if __name__ == "__main__":
 
     try:
         bot.run(config.DISCORD_TOKEN)
+    except discord.LoginFailure as e:
+        # 토큰이 잘못된 경우는 기다려도 달라지지 않는다. 바로 종료해 로그에 드러나게 한다.
+        print(f"봇 실행 실패: 토큰이 올바르지 않습니다. DISCORD_TOKEN 환경변수를 확인하세요. ({e})")
+        raise
     except Exception as e:
         # 곧바로 종료하면 호스팅 쪽에서 즉시 재시작하고, 그 재시도가 디스코드의
-        # 속도 제한을 더 길게 만든다. 잠시 기다렸다가 종료해 간격을 벌린다.
-        print(f"봇 실행 실패: {type(e).__name__}: {e}")
-        print(f"{config.RESTART_BACKOFF}초 후 종료합니다. (재시작 간격 확보)")
-        time.sleep(config.RESTART_BACKOFF)
+        # 속도 제한을 더 길게 만든다. 기다렸다가 종료해 재시도 간격을 벌린다.
+        rate_limited = isinstance(e, discord.HTTPException) and e.status == 429
+        wait = config.RATE_LIMIT_BACKOFF if rate_limited else config.RESTART_BACKOFF
+
+        if rate_limited:
+            print(
+                "봇 실행 실패: 디스코드 속도 제한(429 / Cloudflare 1015)에 걸렸습니다. "
+                "재시도를 계속하면 차단이 연장되므로 길게 대기합니다."
+            )
+        else:
+            print(f"봇 실행 실패: {type(e).__name__}: {e}")
+
+        print(f"{wait}초 후 종료합니다. (재시작 간격 확보)")
+        time.sleep(wait)
         raise
