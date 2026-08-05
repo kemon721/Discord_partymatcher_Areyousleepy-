@@ -281,17 +281,23 @@ class GameSelectModal(BaseModal, title="혼자놀기"):
             f"## {config.MODAL_TIME_LIMIT}초 안에 입력을 완료하지 않으면 종료됩니다."
         ))
 
-        self.choice = discord.ui.TextInput(
-            placeholder="1 또는 2",
+        self.choice = discord.ui.Select(
+            placeholder="진행할 게임을 선택하세요",
             required=True,
-            min_length=1,
-            max_length=1,
+            options=[
+                discord.SelectOption(
+                    label=GAME_NAMES[GAME_ODD_EVEN],
+                    value=GAME_ODD_EVEN,
+                    description=f"정답 시 {fmt(config.ODD_EVEN_REWARD)} 토큰 지급",
+                ),
+                discord.SelectOption(
+                    label=GAME_NAMES[GAME_NUMBER],
+                    value=GAME_NUMBER,
+                    description=f"정답 시 {fmt(config.NUMBER_REWARD)} 토큰 지급",
+                ),
+            ],
         )
-        self.add_item(discord.ui.Label(
-            text="게임 선택",
-            description="1 = 홀짝 맞추기 / 2 = 숫자 맞추기",
-            component=self.choice,
-        ))
+        self.add_item(discord.ui.Label(text="게임 선택", component=self.choice))
 
     async def on_submit(self, interaction: discord.Interaction):
         guild_id, user_id = interaction.guild_id, interaction.user.id
@@ -301,11 +307,11 @@ class GameSelectModal(BaseModal, title="혼자놀기"):
             await reply_timeout(interaction)
             return
 
-        value = self.choice.value.strip()
+        value = self.choice.values[0] if self.choice.values else ''
         if value not in GAME_NAMES:
             play_lock.release(guild_id, user_id)
             await interaction.response.send_message(
-                embed=error_embed("1 또는 2만 입력할 수 있습니다. 토큰 변동은 없습니다."),
+                embed=error_embed("게임을 선택해주세요. 토큰 변동은 없습니다."),
                 ephemeral=True,
             )
             return
@@ -436,17 +442,15 @@ class OddEvenModal(BaseModal, title="홀짝 맞추기"):
             f"## {config.MODAL_TIME_LIMIT}초 안에 제출하지 않으면 종료됩니다."
         ))
 
-        self.answer = discord.ui.TextInput(
-            placeholder="짝 또는 홀",
+        self.answer = discord.ui.Select(
+            placeholder="짝 또는 홀을 선택하세요",
             required=True,
-            min_length=1,
-            max_length=1,
+            options=[
+                discord.SelectOption(label="짝", value="짝", description="2, 4, 6, 8, 10"),
+                discord.SelectOption(label="홀", value="홀", description="1, 3, 5, 7, 9"),
+            ],
         )
-        self.add_item(discord.ui.Label(
-            text="정답 입력",
-            description="'짝' 또는 '홀' 한 글자만 입력합니다. 그 외 입력은 오답으로 처리됩니다.",
-            component=self.answer,
-        ))
+        self.add_item(discord.ui.Label(text="정답 선택", component=self.answer))
 
     async def on_submit(self, interaction: discord.Interaction):
         if elapsed_over_limit(self.started_at):
@@ -454,12 +458,18 @@ class OddEvenModal(BaseModal, title="홀짝 맞추기"):
             await reply_timeout(interaction)
             return
 
-        entered = self.answer.value.strip()
+        chosen = self.answer.values[0] if self.answer.values else ''
+        if not chosen:
+            play_lock.release(interaction.guild_id, interaction.user.id)
+            await interaction.response.send_message(
+                embed=error_embed("정답을 선택해주세요. 토큰 변동은 없습니다."),
+                ephemeral=True,
+            )
+            return
+
         number = roll()
         actual = "짝" if number % 2 == 0 else "홀"
-        correct = entered == actual
-
-        await finish_solo_game(interaction, GAME_ODD_EVEN, entered, correct, number)
+        await finish_solo_game(interaction, GAME_ODD_EVEN, chosen, chosen == actual, number)
 
 
 class NumberModal(BaseModal, title="숫자 맞추기"):
@@ -474,17 +484,15 @@ class NumberModal(BaseModal, title="숫자 맞추기"):
             f"## {config.MODAL_TIME_LIMIT}초 안에 제출하지 않으면 종료됩니다."
         ))
 
-        self.answer = discord.ui.TextInput(
-            placeholder=f"{config.DICE_MIN} ~ {config.DICE_MAX}",
+        self.answer = discord.ui.Select(
+            placeholder="숫자를 선택하세요",
             required=True,
-            min_length=1,
-            max_length=2,
+            options=[
+                discord.SelectOption(label=str(n), value=str(n))
+                for n in range(config.DICE_MIN, config.DICE_MAX + 1)
+            ],
         )
-        self.add_item(discord.ui.Label(
-            text="정답 입력",
-            description=f"{config.DICE_MIN}부터 {config.DICE_MAX} 사이의 숫자. 그 외 입력은 오답으로 처리됩니다.",
-            component=self.answer,
-        ))
+        self.add_item(discord.ui.Label(text="정답 선택", component=self.answer))
 
     async def on_submit(self, interaction: discord.Interaction):
         if elapsed_over_limit(self.started_at):
@@ -492,15 +500,17 @@ class NumberModal(BaseModal, title="숫자 맞추기"):
             await reply_timeout(interaction)
             return
 
-        entered = self.answer.value.strip()
-        number = roll()
-        try:
-            guess = int(entered)
-        except ValueError:
-            guess = None
-        correct = guess == number
+        chosen = self.answer.values[0] if self.answer.values else ''
+        if not chosen:
+            play_lock.release(interaction.guild_id, interaction.user.id)
+            await interaction.response.send_message(
+                embed=error_embed("숫자를 선택해주세요. 토큰 변동은 없습니다."),
+                ephemeral=True,
+            )
+            return
 
-        await finish_solo_game(interaction, GAME_NUMBER, entered, correct, number)
+        number = roll()
+        await finish_solo_game(interaction, GAME_NUMBER, chosen, int(chosen) == number, number)
 
 
 @bot.tree.command(name="혼자놀기", description="토큰을 걸고 혼자 하는 게임을 진행합니다.")
@@ -526,15 +536,47 @@ async def solo_play(interaction: discord.Interaction):
 # ============================================
 # 4. 같이놀기
 # ============================================
+def bet_options(max_bet: int) -> List[int]:
+    """걸 수 있는 금액 선택지. 사다리 값 중 한도 이하인 것들과 한도 자체를 합친다."""
+    amounts = {a for a in config.DUO_BET_LADDER if a <= max_bet}
+    if max_bet >= config.DUO_MIN_BET:
+        amounts.add(max_bet)
+    ordered = sorted(amounts)
+    if len(ordered) > config.SELECT_MAX_OPTIONS:
+        # 넘칠 일은 없지만, 넘치면 가장 큰 값(한도)은 반드시 남긴다.
+        ordered = ordered[: config.SELECT_MAX_OPTIONS - 1] + [ordered[-1]]
+    return ordered
+
+
+def duo_invite_embed(
+    challenger: discord.Member, target: discord.Member, amount: int
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="같이놀기 신청",
+        description=(
+            f"## 걸린 토큰 {fmt(amount)}\n"
+            f"{challenger.mention} 대 {target.mention}\n\n"
+            f"이기면 {fmt(amount)} 토큰을 얻고, 지면 {fmt(amount)} 토큰을 잃습니다."
+        ),
+        color=COLOR_NEUTRAL,
+    )
+    embed.set_footer(
+        text=f"{target.display_name}님만 응답할 수 있습니다 · "
+             f"{config.INVITE_TIME_LIMIT}초 내 무응답 시 자동 거절"
+    )
+    return embed
+
+
 class DuoSetupModal(BaseModal, title="같이놀기"):
-    def __init__(self):
+    def __init__(self, max_bet: int):
         super().__init__()
         self.started_at = time.monotonic()
+        self.max_bet_hint = max_bet
 
         self.add_item(discord.ui.TextDisplay(
             f"상대와 각각 1~{config.DICE_MAX} 중 하나를 뽑아 더 높은 쪽이 이깁니다.\n"
             f"이긴 쪽은 건 토큰만큼 얻고, 진 쪽은 그만큼 잃습니다.\n"
-            f"베팅은 {fmt(config.DUO_UNIT)} 단위이며, 두 사람 중 보유량이 적은 쪽까지만 걸 수 있습니다.\n"
+            f"상대의 보유량이 내 보유량보다 적으면, 적은 쪽에 맞춰 다시 선택해야 합니다.\n"
             f"## {config.MODAL_TIME_LIMIT}초 안에 제출하지 않으면 종료됩니다."
         ))
 
@@ -546,14 +588,17 @@ class DuoSetupModal(BaseModal, title="같이놀기"):
         )
         self.add_item(discord.ui.Label(text="상대", component=self.opponent))
 
-        self.bet = discord.ui.TextInput(
-            placeholder="예: 5 → 500 토큰",
+        self.bet = discord.ui.Select(
+            placeholder="걸 토큰을 선택하세요",
             required=True,
-            max_length=4,
+            options=[
+                discord.SelectOption(label=f"{fmt(amount)} 토큰", value=str(amount))
+                for amount in bet_options(max_bet)
+            ],
         )
         self.add_item(discord.ui.Label(
-            text="베팅 토큰",
-            description="[입력값]00 토큰 — 1을 입력하면 100 토큰, 11을 입력하면 1,100 토큰입니다.",
+            text="걸 토큰",
+            description=f"현재 보유량 기준 최대 {fmt(max_bet)} 토큰까지 걸 수 있습니다.",
             component=self.bet,
         ))
 
@@ -591,49 +636,48 @@ class DuoSetupModal(BaseModal, title="같이놀기"):
             )
             return
 
-        raw = self.bet.value.strip()
-        if not raw.isdigit():
-            await self.reject(interaction, "입력한 토큰 양을 확인해주세요. 숫자만 입력할 수 있습니다.")
+        chosen = self.bet.values[0] if self.bet.values else ''
+        if not chosen.isdigit():
+            await self.reject(interaction, "걸 토큰을 선택해주세요.")
             return
 
-        amount = int(raw) * config.DUO_UNIT
-        if amount < config.DUO_MIN_BET or amount > max_bet:
+        amount = int(chosen)
+        if amount > max_bet:
+            # 상대의 보유량이 내 선택지 기준보다 적은 경우.
             await self.reject(
                 interaction,
-                f"입력한 토큰 양을 확인해주세요. "
-                f"{fmt(config.DUO_MIN_BET)} ~ {fmt(max_bet)} 토큰까지 가능합니다. "
-                f"(입력값 {raw} → {fmt(amount)} 토큰)",
+                f"{target.display_name}님의 보유량이 부족해 {fmt(amount)} 토큰은 걸 수 없습니다. "
+                f"최대 {fmt(max_bet)} 토큰까지 가능합니다. "
+                f"(내 보유 {fmt(my_balance)} / 상대 보유 {fmt(their_balance)})",
+                max_bet=max_bet,
             )
             return
 
         play_lock.refresh(guild_id, user.id)
 
         view = DuoInviteView(challenger=user, target=target, amount=amount)
-        embed = discord.Embed(
-            title="같이놀기 신청",
-            description=(
-                f"{user.mention}님이 {target.mention}님에게 대결을 신청했습니다.\n"
-                f"걸린 토큰 **{fmt(amount)}**\n\n"
-                f"{target.display_name}님만 응답할 수 있습니다. "
-                f"{config.INVITE_TIME_LIMIT}초 안에 응답하지 않으면 자동으로 거절됩니다."
-            ),
-            color=COLOR_NEUTRAL,
+        await interaction.response.send_message(
+            content=f"{target.mention} 대결 신청이 도착했습니다.",
+            embed=duo_invite_embed(user, target, amount),
+            view=view,
         )
-        await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()
 
-    async def reject(self, interaction: discord.Interaction, message: str) -> None:
-        """검증에 실패했을 때 사유와 재입력 버튼을 보여준다."""
-        view = DuoRetryView(interaction.user.id)
+    async def reject(
+        self, interaction: discord.Interaction, message: str, max_bet: Optional[int] = None
+    ) -> None:
+        """검증에 실패했을 때 사유와 다시 선택 버튼을 보여준다."""
+        view = DuoRetryView(interaction.user.id, max_bet if max_bet is not None else self.max_bet_hint)
         await interaction.response.send_message(embed=error_embed(message), view=view, ephemeral=True)
         view.interaction = interaction
         play_lock.refresh(interaction.guild_id, interaction.user.id)
 
 
 class DuoRetryView(discord.ui.View):
-    def __init__(self, user_id: int):
+    def __init__(self, user_id: int, max_bet: int):
         super().__init__(timeout=config.BUTTON_TIME_LIMIT)
         self.user_id = user_id
+        self.max_bet = max_bet
         self.interaction: Optional[discord.Interaction] = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -642,10 +686,10 @@ class DuoRetryView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="다시 입력", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="다시 선택", style=discord.ButtonStyle.secondary)
     async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
         play_lock.refresh(interaction.guild_id, self.user_id)
-        await interaction.response.send_modal(DuoSetupModal())
+        await interaction.response.send_modal(DuoSetupModal(self.max_bet))
         self.stop()
         if self.interaction is None:
             return
@@ -678,6 +722,9 @@ class DuoInviteView(discord.ui.View):
         self.amount = amount
         self.message: Optional[discord.Message] = None
         self.resolved = False
+
+        # 얼마가 걸린 판인지 버튼에서도 바로 보이게 한다.
+        self.accept.label = f"수락 ({fmt(amount)} 토큰)"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.target.id:
@@ -732,7 +779,7 @@ class DuoInviteView(discord.ui.View):
             ),
             color=COLOR_WIN,
         )
-        embed.add_field(name="걸린 토큰", value=fmt(self.amount), inline=True)
+        embed.add_field(name="걸린 토큰", value=f"**{fmt(self.amount)}**", inline=True)
         embed.add_field(
             name=f"{self.challenger.display_name} 보유 토큰",
             value=fmt(balances[self.challenger.id]),
@@ -798,11 +845,147 @@ async def duo_play(interaction: discord.Interaction):
 
     if not await try_acquire(interaction):
         return
-    await interaction.response.send_modal(DuoSetupModal())
+    max_bet = balance // config.DUO_UNIT * config.DUO_UNIT
+    await interaction.response.send_modal(DuoSetupModal(max_bet))
 
 
 # ============================================
-# 5. 토큰보유
+# 5. 토큰선물
+# ============================================
+def gift_received(amount: int) -> int:
+    """선물한 금액 중 실제로 상대에게 들어가는 양."""
+    return int(amount * config.GIFT_RATIO)
+
+
+class GiftModal(BaseModal, title="토큰선물"):
+    def __init__(self):
+        super().__init__()
+
+        self.add_item(discord.ui.TextDisplay(
+            f"보유한 토큰을 다른 인원에게 보냅니다.\n"
+            f"보내는 쪽은 선택한 금액이 그대로 차감되고, "
+            f"받는 쪽에는 그 중 {int(config.GIFT_RATIO * 100)}%가 들어갑니다.\n"
+            f"예를 들어 {fmt(config.GIFT_MIN)} 토큰을 보내면 "
+            f"상대는 {fmt(gift_received(config.GIFT_MIN))} 토큰을 받습니다."
+        ))
+
+        self.target = discord.ui.UserSelect(
+            placeholder="선물할 인원을 선택하세요",
+            min_values=1,
+            max_values=1,
+            required=True,
+        )
+        self.add_item(discord.ui.Label(text="받는 사람", component=self.target))
+
+        self.amount = discord.ui.Select(
+            placeholder="보낼 토큰을 선택하세요",
+            required=True,
+            options=[
+                discord.SelectOption(
+                    label=f"{fmt(value)} 토큰",
+                    value=str(value),
+                    description=f"상대는 {fmt(gift_received(value))} 토큰을 받습니다",
+                )
+                for value in range(config.GIFT_MIN, config.GIFT_MAX + 1, config.GIFT_STEP)
+            ],
+        )
+        self.add_item(discord.ui.Label(text="보낼 토큰", component=self.amount))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild_id, user = interaction.guild_id, interaction.user
+
+        selected = self.target.values
+        target = selected[0] if selected else None
+
+        if target is None:
+            await interaction.response.send_message(
+                embed=error_embed("받는 사람을 선택해주세요."), ephemeral=True
+            )
+            return
+        if target.id == user.id:
+            await interaction.response.send_message(
+                embed=error_embed("자기 자신에게는 선물할 수 없습니다."), ephemeral=True
+            )
+            return
+        if getattr(target, 'bot', False):
+            await interaction.response.send_message(
+                embed=error_embed("봇에게는 선물할 수 없습니다."), ephemeral=True
+            )
+            return
+
+        chosen = self.amount.values[0] if self.amount.values else ''
+        if not chosen.isdigit():
+            await interaction.response.send_message(
+                embed=error_embed("보낼 토큰을 선택해주세요."), ephemeral=True
+            )
+            return
+
+        amount = int(chosen)
+        if not (config.GIFT_MIN <= amount <= config.GIFT_MAX):
+            await interaction.response.send_message(
+                embed=error_embed(
+                    f"{fmt(config.GIFT_MIN)} ~ {fmt(config.GIFT_MAX)} 토큰만 선물할 수 있습니다."
+                ),
+                ephemeral=True,
+            )
+            return
+
+        my_balance = await ensure_account(guild_id, user.id)
+        await ensure_account(guild_id, target.id)
+
+        if my_balance < amount:
+            await interaction.response.send_message(
+                embed=error_embed(
+                    f"보유 토큰이 부족합니다. 현재 보유 {fmt(my_balance)} 토큰입니다."
+                ),
+                ephemeral=True,
+            )
+            return
+
+        received = gift_received(amount)
+        sender_balance, receiver_balance = await store.gift(
+            guild_id, user.id, target.id, amount, received
+        )
+
+        embed = discord.Embed(
+            title="토큰 선물",
+            description=(
+                f"## {fmt(received)} 토큰\n"
+                f"{user.mention} → {target.mention}"
+            ),
+            color=COLOR_WIN,
+        )
+        embed.add_field(name="보낸 토큰", value=fmt(amount), inline=True)
+        embed.add_field(name="받은 토큰", value=fmt(received), inline=True)
+        embed.add_field(
+            name=f"{user.display_name} 보유 토큰", value=fmt(sender_balance), inline=False
+        )
+        embed.add_field(
+            name=f"{target.display_name} 보유 토큰", value=fmt(receiver_balance), inline=False
+        )
+
+        await interaction.response.send_message(content=target.mention, embed=embed)
+
+
+@bot.tree.command(name="토큰선물", description="보유한 토큰을 다른 인원에게 선물합니다.")
+@app_commands.guild_only()
+async def gift_tokens(interaction: discord.Interaction):
+    balance = await ensure_account(interaction.guild_id, interaction.user.id)
+    if balance < config.GIFT_MIN:
+        await interaction.response.send_message(
+            embed=error_embed(
+                f"보유 토큰이 {fmt(config.GIFT_MIN)} 미만이라 선물할 수 없습니다. "
+                f"현재 보유 {fmt(balance)} 토큰입니다."
+            ),
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_modal(GiftModal())
+
+
+# ============================================
+# 6. 토큰보유
 # ============================================
 class BalanceModal(BaseModal, title="토큰보유"):
     def __init__(self):

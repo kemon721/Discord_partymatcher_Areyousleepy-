@@ -147,6 +147,22 @@ class TokenStore:
             await asyncio.to_thread(self._write)
             return members[key]
 
+    async def gift(
+        self, guild_id: int, sender_id: int, receiver_id: int, sent: int, received: int
+    ) -> Tuple[int, int]:
+        """보내는 쪽에서 sent 만큼 빼고 받는 쪽에 received 만큼 넣는다.
+
+        전달 과정에서 일부가 사라지므로 두 값이 다르다.
+        (보낸 사람 보유량, 받은 사람 보유량)을 돌려준다.
+        """
+        async with self._lock:
+            members = self._guild(guild_id)
+            skey, rkey = str(sender_id), str(receiver_id)
+            members[skey] = self._clamp(members.get(skey, 0) - sent)
+            members[rkey] = self._clamp(members.get(rkey, 0) + received)
+            await asyncio.to_thread(self._write)
+            return members[skey], members[rkey]
+
     async def transfer(self, guild_id: int, winner_id: int, loser_id: int, amount: int) -> Tuple[int, int]:
         """패자에게서 승자로 토큰을 옮기고 (승자 보유량, 패자 보유량)을 돌려준다."""
         async with self._lock:
